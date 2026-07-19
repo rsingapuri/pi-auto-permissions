@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type {
 	Api,
 	AssistantMessage,
@@ -16,6 +20,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+	GUARDIAN_INVESTIGATION_TOOLS,
+	GUARDIAN_MAX_INVESTIGATION_ROUNDS,
 	GUARDIAN_OUTPUT_SCHEMA,
 	GuardianModelError,
 	type GuardianModelRequest,
@@ -78,7 +84,9 @@ function request(overrides: Partial<GuardianModelRequest> = {}): GuardianModelRe
 		systemPrompt: "guardian system",
 		userPrompt: "assess this action",
 		outputSchema: GUARDIAN_OUTPUT_SCHEMA,
-		tools: [],
+		tools: GUARDIAN_INVESTIGATION_TOOLS,
+		investigationBudget: { reserve: () => true },
+		isCurrent: async () => true,
 		attempt: 1,
 		...overrides,
 	};
@@ -189,7 +197,9 @@ describe("Pi Guardian model adapter", () => {
 				new AbortController().signal,
 			),
 		).resolves.toEqual({ text: '{"outcome":"allow"}' });
-		expect(observed?.context.tools).toEqual([]);
+		expect(observed?.context.tools?.map((tool) => tool.name)).toEqual(
+			GUARDIAN_INVESTIGATION_TOOLS,
+		);
 		expect(observed?.context.messages).toEqual([
 			{ role: "user", content: "assess this action", timestamp: 7 },
 		]);
@@ -200,7 +210,7 @@ describe("Pi Guardian model adapter", () => {
 		});
 	});
 
-	it("uses the exact catalog model, independent tool-less context, schema, signal, and no provider retries", async () => {
+	it("uses the exact catalog model, independent read-only context, schema, signal, and no provider retries", async () => {
 		const seen: RuntimeCall[] = [];
 		const fixture = registryFixture({
 			complete: async (call) => {
@@ -221,11 +231,13 @@ describe("Pi Guardian model adapter", () => {
 		expect(fixture.auth).toHaveBeenCalledWith(model());
 		expect(seen).toHaveLength(1);
 		expect(seen[0]?.model).toMatchObject({ provider: "test-provider", id: "guardian" });
-		expect(seen[0]?.context).toEqual({
+		expect(seen[0]?.context).toMatchObject({
 			systemPrompt: expect.stringContaining(PI_GUARDIAN_SCHEMA_PREAMBLE),
 			messages: [{ role: "user", content: "assess this action", timestamp: 42 }],
-			tools: [],
 		});
+		expect(seen[0]?.context.tools?.map((tool) => tool.name)).toEqual(
+			GUARDIAN_INVESTIGATION_TOOLS,
+		);
 		expect(seen[0]?.context.systemPrompt).toContain(JSON.stringify(GUARDIAN_OUTPUT_SCHEMA));
 		expect(seen[0]?.options).toEqual({
 			signal,
@@ -383,16 +395,143 @@ describe("Pi Guardian model adapter", () => {
 		expect(fixture.complete).not.toHaveBeenCalled();
 	});
 
-	it("rejects fabricated tool calls and response identity mismatches without executing anything", async () => {
-		const toolCall = registryFixture({
+	it("executes a bounded read-only investigation and returns the subsequent verdict", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "guardian-tools-"));
+		try {
+			await writeFile(join(cwd, "evidence.txt"), "narrow local target\n", "utf8");
+			let toolEvidence: string | undefined;
+			let calls = 0;
+			const fixture = registryFixture({
+				complete: async ({ context }) => {
+					calls += 1;
+					if (calls === 1) {
+						return response(
+							[
+								{
+									type: "toolCall",
+									id: "read-1",
+									name: "read",
+									arguments: { path: "evidence.txt" },
+								},
+							],
+							{ stopReason: "toolUse" },
+						);
+					}
+					const result = context.messages.at(-1);
+					if (result?.role === "toolResult" && result.content[0]?.type === "text") {
+						toolEvidence = result.content[0].text;
+					}
+					return response();
+				},
+			});
+
+			await expect(
+				createPiGuardianModelCall(fixture.registry, { cwd })(
+					request(),
+					new AbortController().signal,
+				),
+			).resolves.toEqual({ text: '{"outcome":"allow"}' });
+			expect(fixture.complete).toHaveBeenCalledTimes(2);
+			expect(toolEvidence).toContain("narrow local target");
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("revalidates the review binding before each provider turn", async () => {
+		const fixture = registryFixture({
 			complete: async () =>
-				response([{ type: "toolCall", id: "1", name: "bash", arguments: { command: "id" } }]),
+				response(
+					[{ type: "toolCall", id: "list", name: "ls", arguments: { path: "." } }],
+					{ stopReason: "toolUse" },
+				),
+		});
+		let checks = 0;
+		const guardedRequest = request({
+			isCurrent: async () => {
+				checks += 1;
+				return checks === 1;
+			},
+		});
+
+		await expectPermanentFailure(
+			createPiGuardianModelCall(fixture.registry)(guardedRequest, new AbortController().signal),
+			"binding changed",
+		);
+		expect(fixture.complete).toHaveBeenCalledTimes(1);
+	});
+
+	it("never executes tool calls from a token-truncated response", async () => {
+		const fixture = registryFixture({
+			complete: async () =>
+				response(
+					[{ type: "toolCall", id: "truncated", name: "read", arguments: { path: "missing" } }],
+					{ stopReason: "length" },
+				),
+		});
+
+		await expect(
+			createPiGuardianModelCall(fixture.registry)(request(), new AbortController().signal),
+		).rejects.toSatisfy(
+			(error: unknown) =>
+				error instanceof GuardianModelError &&
+				error.retryable === true &&
+				error.message.includes("truncated"),
+		);
+		expect(fixture.complete).toHaveBeenCalledTimes(1);
+	});
+
+	it("bounds read-only investigation rounds", async () => {
+		let callId = 0;
+		const fixture = registryFixture({
+			complete: async () => {
+				callId += 1;
+				return response(
+					[{ type: "toolCall", id: `ls-${callId}`, name: "ls", arguments: { path: "." } }],
+					{ stopReason: "toolUse" },
+				);
+			},
+		});
+
+		let reservations = 0;
+		const boundedRequest = request({
+			investigationBudget: {
+				reserve: () => {
+					reservations += 1;
+					return reservations <= GUARDIAN_MAX_INVESTIGATION_ROUNDS;
+				},
+			},
+		});
+		await expectPermanentFailure(
+			createPiGuardianModelCall(fixture.registry)(boundedRequest, new AbortController().signal),
+			"exceeded its read-only investigation limit",
+		);
+		expect(fixture.complete).toHaveBeenCalledTimes(GUARDIAN_MAX_INVESTIGATION_ROUNDS + 1);
+	});
+
+	it("returns an error result for an unadvertised tool and rejects response identity mismatches", async () => {
+		let calls = 0;
+		let unknownToolResult: string | undefined;
+		const toolCall = registryFixture({
+			complete: async ({ context }) => {
+				calls += 1;
+				if (calls === 1) {
+					return response(
+						[{ type: "toolCall", id: "1", name: "bash", arguments: { command: "id" } }],
+						{ stopReason: "toolUse" },
+					);
+				}
+				const result = context.messages.at(-1);
+				if (result?.role === "toolResult" && result.content[0]?.type === "text") {
+					unknownToolResult = result.content[0].text;
+				}
+				return response();
+			},
 		});
 		await expect(
 			createPiGuardianModelCall(toolCall.registry)(request(), new AbortController().signal),
-		).rejects.toSatisfy(
-			(error: unknown) => error instanceof GuardianModelError && error.retryable === true,
-		);
+		).resolves.toEqual({ text: '{"outcome":"allow"}' });
+		expect(unknownToolResult).toContain("Unknown Guardian investigation tool: bash");
 
 		const mismatch = registryFixture({
 			complete: async () => response(undefined, { provider: "other-provider" }),
@@ -403,7 +542,7 @@ describe("Pi Guardian model adapter", () => {
 		);
 	});
 
-	it("rejects any non-empty tool contract in a malformed caller request", async () => {
+	it("rejects a non-fixed tool contract in a malformed caller request", async () => {
 		const fixture = registryFixture();
 		const malformed = {
 			...request(),

@@ -1,23 +1,34 @@
 import type {
 	Api,
+	AssistantMessage,
 	Context,
+	Message,
 	Model,
 	ModelThinkingLevel,
+	TextContent,
 	ThinkingLevel,
+	ToolCall,
+	ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import type { AgentTool as PiAgentTool } from "@earendil-works/pi-agent-core";
 import {
 	type ModelRegistry,
 	type ModelRuntime,
 	VERSION as PI_CODING_AGENT_VERSION,
 } from "@earendil-works/pi-coding-agent";
+import { Check } from "typebox/value";
 
 import {
+	GUARDIAN_INVESTIGATION_TOOLS,
+	GUARDIAN_MAX_TOOL_ENTRY_TOKENS,
 	GuardianModelError,
+	truncateGuardianText,
 	type GuardianModelCall,
 	type GuardianModelRequest,
 	type GuardianModelResponse,
 } from "../guardian/index.js";
+import { createGuardianInvestigationTools } from "./guardian-tools.js";
 
 /**
  * Pi 0.80.10 exposes model lookup and auth through ModelRegistry, but not model
@@ -37,6 +48,8 @@ interface CompatibleModelRuntime {
 }
 
 export interface PiGuardianModelCallOptions {
+	/** Working directory used to resolve relative read-only investigation paths. */
+	readonly cwd?: string;
 	/** Test seam only; request timestamps carry no authorization semantics. */
 	readonly now?: () => number;
 }
@@ -86,7 +99,12 @@ function assertReviewerRequest(request: GuardianModelRequest): void {
 		typeof request.systemPrompt !== "string" ||
 		typeof request.userPrompt !== "string" ||
 		!Array.isArray(request.tools) ||
-		request.tools.length !== 0
+		request.tools.length !== GUARDIAN_INVESTIGATION_TOOLS.length ||
+		request.tools.some((name, index) => name !== GUARDIAN_INVESTIGATION_TOOLS[index]) ||
+		typeof request.investigationBudget !== "object" ||
+		request.investigationBudget === null ||
+		typeof request.investigationBudget.reserve !== "function" ||
+		typeof request.isCurrent !== "function"
 	) {
 		throw permanentModelError("Guardian model request is invalid");
 	}
@@ -118,11 +136,11 @@ function structuredSystemPrompt(request: GuardianModelRequest): string {
 	return `${request.systemPrompt.trimEnd()}\n\n${PI_GUARDIAN_SCHEMA_PREAMBLE}\n${schema}\n`;
 }
 
-function extractResponseText(
+function validatedResponse(
 	message: Awaited<ReturnType<ModelRuntime["completeSimple"]>>,
 	request: GuardianModelRequest,
-): GuardianModelResponse {
-	if (message === null || typeof message !== "object") {
+): AssistantMessage {
+	if (message === null || typeof message !== "object" || !Array.isArray(message.content)) {
 		throw transientModelError("Pi reviewer returned a malformed response");
 	}
 	if (message.provider !== request.provider || message.model !== request.modelId) {
@@ -134,22 +152,93 @@ function extractResponseText(
 	if (message.stopReason === "error") {
 		throw transientModelError("Pi reviewer request failed");
 	}
-	if (!Array.isArray(message.content)) {
-		throw transientModelError("Pi reviewer returned malformed content");
-	}
+	return message;
+}
 
+function responseToolCalls(message: AssistantMessage): ToolCall[] {
+	return message.content.filter((block): block is ToolCall => block.type === "toolCall");
+}
+
+function finalResponseText(message: AssistantMessage): GuardianModelResponse {
 	const text: string[] = [];
 	for (const block of message.content) {
-		if (block.type === "text") {
-			text.push(block.text);
-			continue;
-		}
-		if (block.type === "thinking") continue;
-		// A reviewer has no tools. A tool call is invalid output even if a provider
-		// fabricates one, and is never executed by this adapter.
-		throw transientModelError("Pi reviewer attempted an unavailable tool call");
+		if (block.type === "text") text.push(block.text);
 	}
 	return { text: text.join("") };
+}
+
+function toolResultText(error: unknown): TextContent[] {
+	return [
+		{
+			type: "text",
+			text: error instanceof Error ? error.message : String(error),
+		},
+	];
+}
+
+function textOnlyToolContent(
+	content: Awaited<ReturnType<PiAgentTool["execute"]>>["content"],
+): TextContent[] {
+	const text = content
+		.map((block) =>
+			block.type === "text" ? block.text : "[Image omitted from Guardian investigation]",
+		)
+		.join("\n");
+	return [
+		{
+			type: "text",
+			text: truncateGuardianText(
+				text.length > 0 ? text : "<empty tool result>",
+				GUARDIAN_MAX_TOOL_ENTRY_TOKENS,
+			).text,
+		},
+	];
+}
+
+async function executeInvestigationTool(
+	call: ToolCall,
+	toolByName: ReadonlyMap<string, PiAgentTool>,
+	signal: AbortSignal,
+	now: () => number,
+): Promise<ToolResultMessage> {
+	const tool = toolByName.get(call.name);
+	if (tool === undefined) {
+		return {
+			role: "toolResult",
+			toolCallId: call.id,
+			toolName: call.name,
+			content: toolResultText(new Error(`Unknown Guardian investigation tool: ${call.name}`)),
+			isError: true,
+			timestamp: now(),
+		};
+	}
+
+	try {
+		if (signal.aborted) throw new Error("Guardian investigation was aborted");
+		const args = tool.prepareArguments?.(call.arguments) ?? call.arguments;
+		if (!Check(tool.parameters, args)) {
+			throw new Error(`Invalid arguments for Guardian investigation tool: ${call.name}`);
+		}
+		const result = await tool.execute(call.id, args, signal);
+		return {
+			role: "toolResult",
+			toolCallId: call.id,
+			toolName: call.name,
+			content: textOnlyToolContent(result.content),
+			details: result.details,
+			isError: false,
+			timestamp: now(),
+		};
+	} catch (error) {
+		return {
+			role: "toolResult",
+			toolCallId: call.id,
+			toolName: call.name,
+			content: toolResultText(error),
+			isError: true,
+			timestamp: now(),
+		};
+	}
 }
 
 /**
@@ -163,6 +252,10 @@ export function createPiGuardianModelCall(
 	options: PiGuardianModelCallOptions = {},
 ): GuardianModelCall {
 	const now = options.now ?? Date.now;
+	const investigationTools = createGuardianInvestigationTools(options.cwd ?? process.cwd());
+	const toolByName = new Map<string, PiAgentTool>(
+		investigationTools.map((tool) => [tool.name, tool]),
+	);
 	return async (
 		request: GuardianModelRequest,
 		signal: AbortSignal,
@@ -202,34 +295,67 @@ export function createPiGuardianModelCall(
 		if (signal.aborted) throw permanentModelError("Pi reviewer request was aborted");
 
 		const runtime = exactRuntime(modelRegistry);
+		const messages: Message[] = [
+			{
+				role: "user",
+				content: request.userPrompt,
+				timestamp: now(),
+			},
+		];
 		const context: Context = {
 			systemPrompt: structuredSystemPrompt(request),
-			messages: [
-				{
-					role: "user",
-					content: request.userPrompt,
-					timestamp: now(),
-				},
-			],
-			tools: [],
+			messages,
+			tools: investigationTools.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				parameters: tool.parameters,
+			})),
 		};
-
-		let message: Awaited<ReturnType<ModelRuntime["completeSimple"]>>;
-		try {
-			message = await runtime.completeSimple(model, context, {
-				signal,
-				maxTokens: Math.min(model.maxTokens, PI_GUARDIAN_MAX_OUTPUT_TOKENS),
-				maxRetries: 0,
-				...(request.reasoning === undefined
-					? {}
-					: { reasoning: request.reasoning as ThinkingLevel }),
-			});
-		} catch (error) {
-			if (signal.aborted) {
-				throw permanentModelError("Pi reviewer request was aborted", error);
+		for (;;) {
+			if (signal.aborted) throw permanentModelError("Pi reviewer request was aborted");
+			let current: boolean;
+			try {
+				current = await request.isCurrent();
+			} catch (error) {
+				throw permanentModelError("Guardian review binding check failed", error);
 			}
-			throw transientModelError("Pi reviewer request failed", error);
+			if (!current) throw permanentModelError("Guardian review binding changed");
+			if (signal.aborted) throw permanentModelError("Pi reviewer request was aborted");
+			let rawMessage: Awaited<ReturnType<ModelRuntime["completeSimple"]>>;
+			try {
+				rawMessage = await runtime.completeSimple(model, context, {
+					signal,
+					maxTokens: Math.min(model.maxTokens, PI_GUARDIAN_MAX_OUTPUT_TOKENS),
+					maxRetries: 0,
+					...(request.reasoning === undefined
+						? {}
+						: { reasoning: request.reasoning as ThinkingLevel }),
+				});
+			} catch (error) {
+				if (signal.aborted) {
+					throw permanentModelError("Pi reviewer request was aborted", error);
+				}
+				throw transientModelError("Pi reviewer request failed", error);
+			}
+
+			const message = validatedResponse(rawMessage, request);
+			if (message.stopReason === "length") {
+				throw transientModelError("Pi reviewer response was truncated");
+			}
+			const requestedTools = responseToolCalls(message);
+			if (requestedTools.length === 0) {
+				if (message.stopReason === "toolUse") {
+					throw transientModelError("Pi reviewer returned an empty tool-use response");
+				}
+				return finalResponseText(message);
+			}
+			if (!request.investigationBudget.reserve(requestedTools.length)) {
+				throw permanentModelError("Pi reviewer exceeded its read-only investigation limit");
+			}
+			messages.push(message);
+			for (const call of requestedTools) {
+				messages.push(await executeInvestigationTool(call, toolByName, signal, now));
+			}
 		}
-		return extractResponseText(message, request);
 	};
 }

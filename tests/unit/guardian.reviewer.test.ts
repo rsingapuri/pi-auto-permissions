@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
 	GUARDIAN_DENIAL_MESSAGE,
+	GUARDIAN_INVESTIGATION_TOOLS,
 	GUARDIAN_OUTPUT_SCHEMA,
 	GuardianModelError,
 	GuardianReviewEngine,
@@ -63,7 +64,7 @@ describe("Guardian review binding", () => {
 		).toBe(false);
 	});
 
-	it("passes the selected model and reasoning explicitly to a tool-less independent call", async () => {
+	it("passes the selected model, reasoning, and fixed read-only tools to an independent call", async () => {
 		const captured = binding();
 		const callModel = vi.fn<GuardianModelCall>(allowCall());
 		const engine = new GuardianReviewEngine({ callModel });
@@ -79,9 +80,9 @@ describe("Guardian review binding", () => {
 			reasoning: "high",
 			attempt: 1,
 			outputSchema: GUARDIAN_OUTPUT_SCHEMA,
-			tools: [],
+			tools: GUARDIAN_INVESTIGATION_TOOLS,
 		});
-		expect(request?.systemPrompt).toContain("You have no tools");
+		expect(request?.systemPrompt).toContain("available read-only tools");
 		expect(request?.userPrompt).toContain(captured.canonicalAction);
 	});
 
@@ -195,6 +196,27 @@ describe("Guardian fail-closed behavior", () => {
 			attempts: 1,
 		});
 		expect(permanent).toHaveBeenCalledTimes(1);
+	});
+
+	it("shares one cumulative investigation budget across all retry attempts", async () => {
+		const captured = binding();
+		const budgets: unknown[] = [];
+		const reservations: boolean[] = [];
+		const callModel = vi.fn<GuardianModelCall>(async (request) => {
+			budgets.push(request.investigationBudget);
+			reservations.push(request.investigationBudget.reserve(4));
+			return { text: "invalid" };
+		});
+		const engine = new GuardianReviewEngine({ callModel, retryDelaysMs: [0, 0] });
+
+		expect(await engine.review(input(captured))).toMatchObject({
+			outcome: "deny",
+			reason: "malformed_verdict",
+			attempts: 3,
+		});
+		expect(budgets).toHaveLength(3);
+		expect(budgets.every((budget) => budget === budgets[0])).toBe(true);
+		expect(reservations).toEqual([true, true, false]);
 	});
 
 	it("I15 applies one aggregate deadline and aborts a hanging reviewer", async () => {

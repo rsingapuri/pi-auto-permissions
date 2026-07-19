@@ -36,6 +36,7 @@ import {
   type SandboxStatus,
 } from "../../src/sandbox/index.ts";
 import { GlobalConfigStore } from "../../src/state/index.ts";
+import { SANDBOX_RETRY_GUIDELINE } from "../../src/tools/bash.ts";
 
 const REVIEW_MODEL: Model<string> = {
   id: "judge/one",
@@ -654,6 +655,13 @@ describe("black-box Pi action routing", () => {
       ),
     ).toEqual({ block: true, reason: GUARDIAN_DENIAL_MESSAGE });
     expect(runtime.env.guardianCalls).toHaveLength(1);
+  });
+
+  it("instructs the agent to re-run important sandbox failures with escalation", async () => {
+    const runtime = await createRuntime();
+    const bash = runtime.runner.getToolDefinition("bash");
+
+    expect(bash?.promptGuidelines).toEqual([SANDBOX_RETRY_GUIDELINE]);
   });
 
   it("I1/I4 applies the Off, Unrestricted, and Auto routing matrix to bash and custom tools", async () => {

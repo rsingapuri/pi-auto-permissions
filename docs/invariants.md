@@ -239,6 +239,17 @@ missing credentials, timeout, cancellation, queue exhaustion, oversized input,
 provider failure, internal exception, revision change, backend change, or request
 change. There is no fallback model and no conversion to Unrestricted.
 
+During a review, the independent reviewer may call only fixed `read`, `grep`,
+`find`, and `ls` implementations, resolved against the session cwd. These calls
+are evidence gathering, not execution of the reviewed action; they expose no
+mutation, shell, or network capability. They use bounded Node filesystem
+operations and never execute or download search helpers. One review
+permits at most four tool rounds and eight calls cumulatively across all retry
+attempts, all within the same aggregate deadline. Missing local
+context is not policy evidence of danger: the reviewer investigates when the
+fact is material and otherwise denies only concretely evidenced severe,
+irreversible risk.
+
 ## 4. Admission function
 
 For a healthy enabled Auto session, classify built-ins as follows.
@@ -370,9 +381,11 @@ rule in Section 4.7.
 
 ### I5. Pre-execution denial invariant
 
-A denied reviewed action reaches no tool executor and creates no process. A normal
-sandboxed call may perform permitted effects before the OS reports a later denied
-operation, but the extension never elevates or repeats it automatically.
+A denied reviewed action reaches no executor for that action and creates no
+process. The reviewer may already have performed bounded read-only evidence
+collection. A normal sandboxed call may perform permitted effects before the OS
+reports a later denied operation, but the extension never elevates or repeats it
+automatically.
 
 ### I6. Unsandboxed-shell invariant
 
@@ -398,9 +411,11 @@ failure.
 
 ### I10. Fail-closed invariant
 
-Authorization, binding, verdict, configuration, and containment uncertainty in
-a guarded Auto path maps to denial before execution. Classification uncertainty
-maps to Guardian review or denial, never directly to unreviewed execution.
+Review-protocol, binding, configuration, and containment uncertainty in a
+guarded Auto path maps to denial before execution. Missing evidence about an
+action does not itself establish dangerousness; the Guardian may investigate it
+with bounded read-only tools. Classification uncertainty maps to Guardian review
+or denial, never directly to unreviewed execution.
 ReviewOnly is selected only by a positive unsupported-platform classification;
 neither path ever maps to Unrestricted.
 

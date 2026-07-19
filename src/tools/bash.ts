@@ -17,6 +17,13 @@ export const GUARDED_BASH_METADATA = Object.freeze({
   schemaVersion: 1,
 });
 
+/*
+ * Adapted from OpenAI Codex's on-request sandbox retry guidance at revision
+ * 0fb559f0f6e231a88ac02ea002d3ecd248e2b515 for Pi's guarded bash schema.
+ */
+export const SANDBOX_RETRY_GUIDELINE =
+  'If an important command fails because of sandboxing, re-run it with sandbox_permissions: "require_escalated".';
+
 export const guardedBashSchema = Type.Object({
   command: Type.String({ description: "Bash command to execute" }),
   timeout: Type.Optional(
@@ -54,6 +61,7 @@ export function registerGuardedBashTool(
   pi.registerTool({
     ...renderer,
     parameters: guardedBashSchema,
+    promptGuidelines: [SANDBOX_RETRY_GUIDELINE],
     executionMode: "sequential",
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const runtime = getRuntime();

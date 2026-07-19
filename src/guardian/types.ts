@@ -62,6 +62,13 @@ export type GuardianTranscriptItem =
 	| { readonly kind: "tool_result"; readonly toolName?: string; readonly text: string }
 	| { readonly kind: "developer" | "system"; readonly text: string };
 
+export type GuardianInvestigationToolName = "read" | "grep" | "find" | "ls";
+
+export interface GuardianInvestigationBudget {
+	/** Atomically reserve one investigation round and its calls. */
+	reserve(callCount: number): boolean;
+}
+
 export interface GuardianModelRequest {
 	readonly provider: string;
 	readonly modelId: string;
@@ -70,8 +77,12 @@ export interface GuardianModelRequest {
 	readonly systemPrompt: string;
 	readonly userPrompt: string;
 	readonly outputSchema: GuardianOutputSchema;
-	/** The reviewer is deliberately independent and receives no tools. */
-	readonly tools: readonly [];
+	/** Fixed read-only tools available only to the independent reviewer. */
+	readonly tools: readonly GuardianInvestigationToolName[];
+	/** Shared across all retry attempts for this one review. */
+	readonly investigationBudget: GuardianInvestigationBudget;
+	/** Revalidate the captured policy binding before each provider turn. */
+	readonly isCurrent: () => Promise<boolean>;
 	readonly attempt: number;
 }
 

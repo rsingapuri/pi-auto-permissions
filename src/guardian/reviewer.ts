@@ -14,6 +14,7 @@ import type {
 	GuardianAllowResult,
 	GuardianDenialReason,
 	GuardianDenyResult,
+	GuardianInvestigationBudget,
 	GuardianModelCall,
 	GuardianModelRequest,
 	GuardianReviewBinding,
@@ -30,6 +31,8 @@ export const GUARDIAN_REVIEW_DEADLINE_MS = 90_000;
 export const GUARDIAN_REVIEW_MAX_ATTEMPTS = 3;
 export const GUARDIAN_DEFAULT_MAX_CONCURRENT_REVIEWS = 4;
 export const GUARDIAN_DEFAULT_MAX_QUEUED_REVIEWS = 32;
+export const GUARDIAN_MAX_INVESTIGATION_ROUNDS = 4;
+export const GUARDIAN_MAX_INVESTIGATION_CALLS = 8;
 const DEFAULT_RETRY_DELAYS_MS = [200, 400] as const;
 const SUPPORTED_THINKING_LEVELS = new Set<ModelThinkingLevel>([
 	"off",
@@ -40,7 +43,12 @@ const SUPPORTED_THINKING_LEVELS = new Set<ModelThinkingLevel>([
 	"xhigh",
 	"max",
 ]);
-const NO_TOOLS = Object.freeze([]) as readonly [];
+export const GUARDIAN_INVESTIGATION_TOOLS = Object.freeze([
+	"read",
+	"grep",
+	"find",
+	"ls",
+] as const);
 
 class GuardianDeadlineError extends Error {
 	constructor() {
@@ -82,6 +90,7 @@ export interface GuardianReviewEngineOptions {
 
 interface PreparedReview {
 	readonly turnId: string;
+	readonly investigationBudget: GuardianInvestigationBudget;
 	readonly binding: GuardianReviewBinding;
 	readonly prompt: GuardianPrompt;
 	readonly signal: AbortSignal | undefined;
@@ -91,6 +100,25 @@ interface PreparedReview {
 	settled: boolean;
 	queueTimer: ReturnType<typeof setTimeout> | undefined;
 	queueAbortListener: (() => void) | undefined;
+}
+
+function createInvestigationBudget(): GuardianInvestigationBudget {
+	let rounds = 0;
+	let calls = 0;
+	return Object.freeze({
+		reserve(callCount: number): boolean {
+			if (!Number.isSafeInteger(callCount) || callCount <= 0) return false;
+			if (
+				rounds >= GUARDIAN_MAX_INVESTIGATION_ROUNDS ||
+				calls + callCount > GUARDIAN_MAX_INVESTIGATION_CALLS
+			) {
+				return false;
+			}
+			rounds += 1;
+			calls += callCount;
+			return true;
+		},
+	});
 }
 
 function snapshotReviewer(reviewer: GuardianReviewerSelection): GuardianReviewerSelection {
@@ -288,6 +316,7 @@ export class GuardianReviewEngine {
 		return new Promise<GuardianReviewResult>((resolve) => {
 			const prepared: PreparedReview = {
 				turnId: input.turnId,
+				investigationBudget: createInvestigationBudget(),
 				binding,
 				prompt,
 				signal: input.signal,
@@ -409,7 +438,19 @@ export class GuardianReviewEngine {
 					systemPrompt: prepared.prompt.systemPrompt,
 					userPrompt: prepared.prompt.userPrompt,
 					outputSchema: GUARDIAN_OUTPUT_SCHEMA,
-					tools: NO_TOOLS,
+					tools: GUARDIAN_INVESTIGATION_TOOLS,
+					investigationBudget: prepared.investigationBudget,
+					isCurrent: async () => {
+						try {
+							const current = await prepared.getCurrentBinding();
+							return (
+								current !== null &&
+								guardianReviewBindingsEqual(prepared.binding, current)
+							);
+						} catch {
+							return false;
+						}
+					},
 					attempt,
 				});
 				const response = await this.#beforeDeadline(

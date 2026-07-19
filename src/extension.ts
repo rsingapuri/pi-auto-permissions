@@ -76,7 +76,9 @@ const DEFAULT_DEPENDENCIES: PermissionExtensionDependencies = {
   createDangerousCommandDetector,
   createSandbox: (options) => createProductionSandboxController(options),
   createGuardian: (ctx) =>
-    new GuardianReviewEngine({ callModel: createPiGuardianModelCall(ctx.modelRegistry) }),
+    new GuardianReviewEngine({
+      callModel: createPiGuardianModelCall(ctx.modelRegistry, { cwd: ctx.cwd }),
+    }),
   transcript: (ctx) => guardianTranscriptFromSession(ctx.sessionManager),
   createBashDefinition: (cwd, operations) =>
     createBashToolDefinition(cwd, operations === undefined ? {} : { operations }),

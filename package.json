@@ -1,6 +1,6 @@
 {
   "name": "pi-auto-permissions",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A minimal Codex-style Auto/Unrestricted permission guardrail for Pi",
   "type": "module",
   "license": "Apache-2.0",

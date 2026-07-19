@@ -171,11 +171,18 @@ only the four known read-only built-ins and statically denies every `write` or
 classification.
 
 The reviewer sees a bounded conversation transcript and one canonical action.
-It has no tools. Its result must be exact schema-valid JSON; `ask`, prose,
-malformed output, timeouts, missing credentials, provider errors, cancellation,
-state changes, and every other non-allow outcome all deny. Reviews have one
-aggregate 90-second deadline, at most three provider attempts, and denial
-circuit breakers to prevent loops.
+It may investigate material local facts with fixed read-only `read`, `grep`,
+`find`, and `ls` tools. These bounded implementations use only Node filesystem
+operations and never execute or download search helpers. Investigation is bounded to
+four tool rounds and eight calls cumulatively across all retry attempts within
+the review's aggregate deadline. The policy defaults to
+allow and reserves denial for evidenced severe, irreversible harm; missing
+context or escalation alone is not grounds for denial. Its final result must be
+exact schema-valid JSON; `ask`, prose, malformed output, timeouts, missing
+credentials, provider errors, cancellation, state changes, and every other
+non-allow outcome all deny. Reviews have one aggregate 90-second deadline, at
+most three verdict attempts and seven total provider turns, and denial circuit
+breakers to prevent loops.
 
 A sandbox rejection is returned as an ordinary tool error. The extension does
 not replay a command that may have started. The model may issue a different
@@ -219,8 +226,9 @@ in [`docs/implementation-plan.md`](docs/implementation-plan.md). Important
 limits are:
 
 - A reviewer model is probabilistic and can make a wrong allow decision.
-- Sandboxed shell commands have broad read access. The fixed sandbox blocks
-  network and unauthorized writes; it is not a general secret-reading boundary.
+- Sandboxed shell commands and the reviewer's bounded investigation tools have
+  broad read access. Read evidence is sent to the selected reviewer provider;
+  this extension is not a general secret-reading boundary.
 - Reviewed escalated shell commands, reviewed out-of-root direct file writes,
   and reviewed custom tools execute without OS containment after an allow.
 - Third-party tool implementations and other loaded Pi extensions are trusted.

@@ -11,7 +11,8 @@ These files are copied verbatim from OpenAI Codex revision
 - `NOTICE` from the repository root
   (`sha256:9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915`)
 
-The runtime assembles a modified derivative prompt in TypeScript. It removes
-Codex's post-denial human-approval override and read-only-tool investigation
-instructions because this extension has no Ask mode and gives the reviewer no
-tools. Those changes are identified in the generated prompt source.
+The runtime assembles a shorter modified derivative prompt in TypeScript. It
+removes Codex's post-denial human-approval override because this extension has
+no Ask mode, retains evidence-based read-only investigation, and narrows denial
+to concretely evidenced severe, irreversible harm. Those changes are identified
+in the generated prompt source.

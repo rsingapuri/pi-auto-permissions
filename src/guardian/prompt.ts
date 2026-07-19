@@ -365,7 +365,7 @@ export function buildGuardianPrompt(input: GuardianPromptInput): GuardianPrompt 
 		parts.push(`Retry reason:\n${boundedRetryReason}\n\n`);
 	}
 	parts.push(
-		"Assess the exact planned action below using only the supplied evidence. If material context is missing, deny and explain the uncertainty.\n",
+		"Assess the exact planned action below. Use read-only tools if local evidence would materially change the decision. Missing context alone is not a reason to deny.\n",
 		"Planned action JSON:\n",
 		`${input.canonicalAction}\n`,
 		">>> APPROVAL REQUEST END\n",

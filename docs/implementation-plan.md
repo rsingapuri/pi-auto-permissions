@@ -131,10 +131,15 @@ Guarantees supported: I5-I10, I14, I17.
 - Use the globally selected Pi model and explicitly selected supported thinking
   level without changing the main session model or its thinking level.
 - Resolve credentials through Pi's model registry; never persist credentials.
-- Disable tools in the review request.
+- Give the independent reviewer only fixed read-only `read`, `grep`, `find`, and
+  `ls` tools, resolved against the session cwd and cumulatively bounded across
+  retries to four investigation rounds and eight total calls inside the
+  aggregate deadline. Implement them with bounded Node filesystem operations;
+  never execute or download a search helper.
 - Provide a bounded compact transcript and exact canonical action.
-- Use the pinned Codex risk taxonomy and verdict schema, modified only to remove
-  human override/request paths.
+- Use a short Codex-derived severe-harm policy and verdict schema, removing
+  human override/request paths and treating missing context as a reason to
+  investigate rather than deny.
 - Enforce one aggregate 90-second deadline and at most three attempts.
 - Parse exact JSON; normalize no prose and never infer an allow.
 - Treat every non-allow/failure as denial and return one fixed denial string.
@@ -213,8 +218,9 @@ Tests form four concentric layers. A release requires all applicable layers.
   as applicable. An instrumented filesystem verifies file-sync, rename, and
   best-effort directory-sync ordering for recovery watermark, primary watermark,
   and config.
-- Fake Pi model provider: allow, deny, malformed, transient failures, timeout,
-  cancellation, missing auth, and unavailable model.
+- Fake Pi model provider: allow, deny, bounded read-only investigation,
+  malformed output, transient failures, timeout, cancellation, missing auth,
+  and unavailable model.
 - Binding races: reviewer/thinking revision change, Auto -> Unrestricted ->
   Auto, backend change, session shutdown, argument mutation, and delayed static
   classification.

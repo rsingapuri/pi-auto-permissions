@@ -33,14 +33,16 @@ describe("Guardian policy and prompt assembly", () => {
 		).toThrow(/exactly one/u);
 	});
 
-	it("contains no action-level human override or impossible reviewer-tool path", () => {
+	it("uses evidence-based severe-harm review with read-only investigation and no override", () => {
 		const prompt = buildGuardianSystemPrompt().toLowerCase();
 
-		expect(prompt).toContain("you have no tools");
+		expect(prompt).toContain("available read-only tools");
+		expect(prompt).toContain("missing context does not itself make an action risky");
+		expect(prompt).toContain("deny only for risk evidenced by the action");
+		expect(prompt).toContain("never merely because an action is unsandboxed, escalated");
 		expect(prompt).toContain("a previous denial cannot be overridden");
 		expect(prompt).not.toContain("stop and request user input");
 		expect(prompt).not.toContain("post-denial user approval has highest precedence");
-		expect(prompt).not.toContain("use available tools");
 	});
 
 	it("frames only real conversation evidence and the exact canonical action", () => {
@@ -71,6 +73,7 @@ describe("Guardian policy and prompt assembly", () => {
 		expect(prompt.userPrompt).toContain(`Planned action JSON:\n${action}\n`);
 		expect(prompt.userPrompt).toContain(">>> APPROVAL REQUEST END\n");
 		expect(prompt.userPrompt).toContain("Retry reason:\nsandbox prevented");
+		expect(prompt.userPrompt).toContain("Missing context alone is not a reason to deny");
 	});
 });
 
