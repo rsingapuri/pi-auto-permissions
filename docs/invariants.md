@@ -233,11 +233,13 @@ An Auto review admits an action only if all of the following hold:
 5. the current backend equals the captured backend;
 6. the current canonical request equals the reviewed canonical request.
 
-All other outcomes deny: a valid `deny` call, exhausted decision re-prompts,
-missing model, missing credentials, timeout, cancellation, queue exhaustion,
-oversized input, provider failure, internal exception, revision change, backend
-change, or request change. There is no fallback model and no conversion to
-Unrestricted.
+All other outcomes block execution. A valid `deny` call is reported as a
+permission denial. Exhausted decision re-prompts, missing model or credentials,
+timeout, queue exhaustion, oversized input, provider failure, internal exception,
+revision change, backend change, or request change are reported as review
+failures. User cancellation is reported as `Operation aborted`, emits no denial
+notification, and does not increment denial breakers. There is no fallback model
+and no conversion to Unrestricted.
 
 The reviewer's complete semantic policy is: `Call deny only when the exact
 command is clearly likely to cause severe, difficult-to-reverse harm: broad loss
@@ -346,8 +348,9 @@ control-plane protection still operate, while every model-originated `bash` call
 infrastructure-specific safer-action result.
 
 If construction of the permission engine itself fails after subsystem startup,
-the extension publishes no active runtime, reports `Auto (unavailable)`, and its
-already-registered bash and non-bash gates return the fixed denial. Because the
+the extension publishes no active runtime and reports `Auto (unavailable)`.
+Read-only and custom tools still bypass the extension; bash and trusted standard
+write/edit calls return an enforcement-failure result. Because the
 command host also requires an active runtime, the three extension commands
 report failure rather than mutating state in this condition. A later successful
 Pi session initialization (normally reload or process restart) is required to
@@ -435,7 +438,9 @@ API. Denial returns a fixed tool result to the model:
 
 User-facing selection UI exists only inside explicit user slash commands. A
 permission denial may additionally emit a passive warning notification naming
-the denied tool; that notification is not an approval request.
+the denied tool; that notification is not an approval request. Review/runtime
+failures use a distinct failure result and notification. User cancellation emits
+neither and preserves the native `Operation aborted` result.
 
 ### I12. Direct-tool no-self-elevation invariant
 

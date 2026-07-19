@@ -156,7 +156,10 @@ Guarantees supported: I5-I10, I14, I17.
 - Enforce one aggregate 90-second deadline and at most three retryable attempts.
 - Convert the structured decision call locally into the exact one-field verdict;
   never interpret free-form model text as a decision.
-- Treat every non-allow/failure as denial and return one fixed denial string.
+- Block execution on every non-allow outcome, but report categories accurately:
+  only a valid `deny` decision is a permission denial; protocol/runtime failures
+  are review failures; user cancellation is `Operation aborted` and does not
+  increment denial breakers.
 - Track three consecutive and ten-of-fifty per-turn shell denial breakers;
   breaker interruption never blocks non-shell passthrough.
 

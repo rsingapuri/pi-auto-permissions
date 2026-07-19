@@ -5,11 +5,12 @@ import type {
   ToolInfo,
 } from "@earendil-works/pi-coding-agent";
 import type { GuardianTranscriptItem } from "../guardian/index.ts";
-import { GUARDIAN_DENIAL_MESSAGE } from "../guardian/index.ts";
+import { GUARDIAN_REVIEW_FAILURE_MESSAGE } from "../guardian/index.ts";
 import type { PermissionEngine } from "../runtime/index.ts";
 import { notifyPermissionDenied } from "./denial-notice.ts";
 
 const DIRECT_FILE_TOOL_NAMES = new Set(["read", "grep", "find", "ls", "write", "edit"]);
+const READ_ONLY_FILE_TOOL_NAMES = new Set(["read", "grep", "find", "ls"]);
 
 export interface PermissionToolGateRuntime {
   readonly engine: PermissionEngine;
@@ -26,14 +27,22 @@ export function registerPermissionToolGate(
 ): void {
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName === "bash") return;
+
+    const info = findToolInfo(pi, event.toolName);
+    const trustedFileTool = isTrustedStandardFileTool(info, event);
+    // Reads and explicitly installed custom tools are outside this extension's
+    // enforcement surface. Do not touch permission state, lifecycle, or abort
+    // signals for them; their native success/error/cancellation must pass through.
+    if (!trustedFileTool || READ_ONLY_FILE_TOOL_NAMES.has(event.toolName)) return;
+
+    // Only trusted standard write/edit calls reach deterministic path policy.
     const runtime = getRuntime();
     if (runtime === null) {
-      notifyPermissionDenied(ctx, event.toolName);
-      return { block: true, reason: GUARDIAN_DENIAL_MESSAGE };
+      notifyPermissionDenied(ctx, event.toolName, "configuration_fault");
+      return { block: true, reason: GUARDIAN_REVIEW_FAILURE_MESSAGE };
     }
 
     await runtime.refreshStatus(ctx);
-    const info = findToolInfo(pi, event.toolName);
     const reviewSignal = runtime.signal(ctx.signal);
     const decision = await runtime.engine.gate({
       toolCallId: event.toolCallId,
@@ -42,12 +51,12 @@ export function registerPermissionToolGate(
       input: event.input,
       cwd: ctx.cwd,
       toolMetadata: canonicalToolMetadata(info, event.toolName),
-      trustedFileTool: isTrustedStandardFileTool(info, event),
+      trustedFileTool,
       transcript: () => runtime.transcript(ctx),
       ...(reviewSignal === undefined ? {} : { signal: reviewSignal }),
     });
     if (decision.outcome === "admit") return;
-    notifyPermissionDenied(ctx, event.toolName, decision.reviewReason);
+    notifyPermissionDenied(ctx, event.toolName, decision.reason, decision.reviewReason);
     if (decision.interruptTurn) ctx.abort();
     return { block: true, reason: decision.message };
   });

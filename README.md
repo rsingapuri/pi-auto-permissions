@@ -165,9 +165,11 @@ writes only to the workspace and temporary roots, keeps protected metadata and
 the extension's durable state read-only, denies network and local binding, and
 applies to descendant processes.
 
-If direct-file path policy construction fails at startup, the fallback admits
-only the four known read-only standard tools and statically denies every `write` or
-`edit`. It does not guess path safety or ask the reviewer to replace missing
+Read-only standard tools and installed custom tools bypass permission runtime
+state entirely, preserving their native success, error, and cancellation
+results. If direct-file path policy construction fails at startup, the fallback
+admits only the four known read-only standard tools and statically denies every
+`write` or `edit`. It does not guess path safety or ask the reviewer to replace missing
 classification.
 
 Only reviewed shell actions reach the reviewer. Its complete semantic policy is:
@@ -187,11 +189,12 @@ Text answers, missing decisions, multiple decisions, and decision calls mixed
 with investigation calls are re-prompted up to twice; only one valid decision
 tool call is accepted. The adapter converts that structured call into a local
 one-field verdict. Exhausted re-prompts, timeouts, missing credentials, provider
-errors, cancellation, state changes, and every other non-allow outcome deny.
-Reviews have one aggregate 90-second deadline, at most three retryable model
-attempts, and denial circuit breakers to prevent loops. The model always sees
-one fixed denial message, while the user notification identifies whether the
-reviewer actually called `deny` or failed for a protocol/runtime reason.
+errors, and state changes block execution but are reported as permission-review
+failures, not Guardian denials. User cancellation is reported as `Operation
+aborted`, emits no denial notification, and does not count toward denial circuit
+breakers. Only an actual `deny` decision receives the fixed permission-denied
+message. Reviews have one aggregate 90-second deadline, at most three retryable
+model attempts, and denial circuit breakers to prevent loops.
 
 A sandbox rejection is returned as an ordinary tool error. The extension does
 not replay a command that may have started. The model may issue a different

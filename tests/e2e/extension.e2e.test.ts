@@ -25,6 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPermissionExtension } from "../../src/extension.ts";
 import {
   GUARDIAN_DENIAL_MESSAGE,
+  GUARDIAN_OPERATION_ABORTED_MESSAGE,
+  GUARDIAN_REVIEW_FAILURE_MESSAGE,
   GuardianReviewEngine,
   type GuardianModelRequest,
 } from "../../src/guardian/index.ts";
@@ -114,13 +116,13 @@ class TestRuntime {
     command: string;
     timeout?: number;
     sandbox_permissions?: "use_default" | "require_escalated";
-  }): Promise<unknown> {
+  }, signal?: AbortSignal): Promise<unknown> {
     const definition = this.runner.getToolDefinition("bash");
     if (definition === undefined) throw new Error("guarded bash was not registered");
     return definition.execute(
       `bash-${this.env.localCommands.length}-${this.env.sandboxCommands.length}`,
       params,
-      undefined,
+      signal,
       undefined,
       this.runner.createContext(),
     );
@@ -146,6 +148,7 @@ async function createRuntime(options: {
   guardianCall?: (
     request: GuardianModelRequest,
     environment: TestEnvironment,
+    signal: AbortSignal,
   ) => Promise<{ text: string }>;
 } = {}): Promise<TestRuntime> {
   const env: TestEnvironment = {
@@ -170,10 +173,10 @@ async function createRuntime(options: {
       new GuardianReviewEngine({
         maxAttempts: 1,
         retryDelaysMs: [],
-        callModel: async (request) => {
+        callModel: async (request, signal) => {
           env.guardianCalls.push(request);
           if (options.guardianCall !== undefined) {
-            return options.guardianCall(request, env);
+            return options.guardianCall(request, env, signal);
           }
           return { text: JSON.stringify({ outcome: env.verdict }) };
         },
@@ -651,6 +654,14 @@ describe("black-box Pi action routing", () => {
     expect(runtime.env.guardianCalls).toEqual([]);
   });
 
+  it("passes reads through without consulting unavailable permission runtime state", async () => {
+    const runtime = await createRuntime();
+
+    expect(await runtime.tool("read", { path: "ordinary.txt" }, "pre-start-read")).toBeUndefined();
+    expect(runtime.ui.notify).not.toHaveBeenCalled();
+    expect(runtime.env.guardianCalls).toEqual([]);
+  });
+
   it("I5 passes through a custom tool even when it uses a standard file-tool name", async () => {
     await configureReviewer();
     const spoofedTools = toolInfo().map((tool) =>
@@ -881,7 +892,7 @@ describe("black-box Pi action routing", () => {
 
     runtime.sandbox.failRuntime("sandbox cleanup failed");
     await expect(runtime.bash({ command: "echo after-failure" })).rejects.toThrow(
-      GUARDIAN_DENIAL_MESSAGE,
+      GUARDIAN_REVIEW_FAILURE_MESSAGE,
     );
     expect(runtime.status()).toBe("Permissions: Auto (sandbox unavailable)");
     expect(runtime.env.guardianCalls).toEqual([]);
@@ -890,7 +901,7 @@ describe("black-box Pi action routing", () => {
 
     await expect(
       runtime.bash({ command: "echo escalated", sandbox_permissions: "require_escalated" }),
-    ).rejects.toThrow(GUARDIAN_DENIAL_MESSAGE);
+    ).rejects.toThrow(GUARDIAN_REVIEW_FAILURE_MESSAGE);
     expect(runtime.env.guardianCalls).toEqual([]);
     expect(runtime.env.localCommands).toEqual([]);
   });
@@ -902,7 +913,9 @@ describe("black-box Pi action routing", () => {
     });
     await runtime.start();
     expect(runtime.status()).toBe("Permissions: Auto (sandbox unavailable)");
-    await expect(runtime.bash({ command: "echo never" })).rejects.toThrow(GUARDIAN_DENIAL_MESSAGE);
+    await expect(runtime.bash({ command: "echo never" })).rejects.toThrow(
+      GUARDIAN_REVIEW_FAILURE_MESSAGE,
+    );
     expect(runtime.env.guardianCalls).toEqual([]);
     expect(runtime.env.localCommands).toEqual([]);
     expect(runtime.env.sandboxCommands).toEqual([]);
@@ -915,7 +928,7 @@ describe("black-box Pi action routing", () => {
 
     expect(runtime.status()).toBe("Permissions: Auto (sandbox unavailable)");
     await expect(runtime.bash({ command: "echo never" })).rejects.toThrow(
-      GUARDIAN_DENIAL_MESSAGE,
+      GUARDIAN_REVIEW_FAILURE_MESSAGE,
     );
     expect(runtime.env.guardianCalls).toEqual([]);
     expect(runtime.env.localCommands).toEqual([]);
@@ -924,6 +937,28 @@ describe("black-box Pi action routing", () => {
       expect.stringContaining("Auto shell commands will be denied"),
       "error",
     );
+  });
+
+  it("reports user-cancelled shell review as an abort, not a permission denial", async () => {
+    const runtime = await createRuntime({
+      guardianCall: async () => new Promise(() => undefined),
+    });
+    await configureReviewer();
+    await runtime.start();
+    const controller = new AbortController();
+    const operation = runtime.bash(
+      { command: "rm -rf generated", sandbox_permissions: "require_escalated" },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(runtime.env.guardianCalls).toHaveLength(1));
+    controller.abort();
+
+    await expect(operation).rejects.toThrow(GUARDIAN_OPERATION_ABORTED_MESSAGE);
+    expect(runtime.ui.notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("Permission denied"),
+      expect.anything(),
+    );
+    expect(runtime.env.localCommands).toEqual([]);
   });
 
   it("I11 has no action-dialog path in noninteractive print mode and safer calls can continue", async () => {
@@ -978,7 +1013,7 @@ describe("black-box Pi action routing", () => {
 
     await sibling.command("perm-auto-model", "test-provider/judge/one xhigh");
     releaseReview?.();
-    await expect(staleApproval).rejects.toThrow(GUARDIAN_DENIAL_MESSAGE);
+    await expect(staleApproval).rejects.toThrow(GUARDIAN_REVIEW_FAILURE_MESSAGE);
 
     await runtime.bash({
       command: "echo fresh-under-xhigh",

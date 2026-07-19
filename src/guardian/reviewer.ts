@@ -27,6 +27,9 @@ import { GuardianVerdictError, parseGuardianVerdict } from "./verdict.js";
 
 export const GUARDIAN_DENIAL_MESSAGE =
 	"Permission denied. This action was not executed. No override will be requested. Choose a materially safer action.";
+export const GUARDIAN_REVIEW_FAILURE_MESSAGE =
+	"Permission review failed. This action was not executed.";
+export const GUARDIAN_OPERATION_ABORTED_MESSAGE = "Operation aborted";
 export const GUARDIAN_REVIEW_DEADLINE_MS = 90_000;
 export const GUARDIAN_REVIEW_MAX_ATTEMPTS = 3;
 export const GUARDIAN_DEFAULT_MAX_CONCURRENT_REVIEWS = 4;
@@ -629,14 +632,21 @@ export class GuardianReviewEngine {
 		record = true,
 		verdict?: GuardianVerdict,
 	): GuardianDenyResult {
-		const breaker = record
+		const shouldRecord = record && reason !== "cancelled";
+		const breaker = shouldRecord
 			? this.#circuitBreaker.recordDenial(turnId)
 			: this.#circuitBreaker.snapshot(turnId);
+		const message =
+			reason === "cancelled"
+				? GUARDIAN_OPERATION_ABORTED_MESSAGE
+				: reason === "model_denied" || reason === "circuit_breaker"
+					? GUARDIAN_DENIAL_MESSAGE
+					: GUARDIAN_REVIEW_FAILURE_MESSAGE;
 		const result = {
 			outcome: "deny" as const,
 			attempts,
 			reason,
-			message: GUARDIAN_DENIAL_MESSAGE,
+			message,
 			interruptTurn: breaker.interruptTurn,
 		};
 		return verdict === undefined ? result : { ...result, verdict };

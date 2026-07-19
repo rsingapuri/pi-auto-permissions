@@ -5,7 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import {
-  GUARDIAN_DENIAL_MESSAGE,
+  GUARDIAN_REVIEW_FAILURE_MESSAGE,
   type GuardianTranscriptItem,
 } from "../guardian/index.ts";
 import type { PermissionEngine } from "../runtime/index.ts";
@@ -66,8 +66,8 @@ export function registerGuardedBashTool(
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const runtime = getRuntime();
       if (runtime === null) {
-        notifyPermissionDenied(ctx, "bash");
-        throw new Error(GUARDIAN_DENIAL_MESSAGE);
+        notifyPermissionDenied(ctx, "bash", "configuration_fault");
+        throw new Error(GUARDIAN_REVIEW_FAILURE_MESSAGE);
       }
       await runtime.refreshBackend(ctx);
       const reviewSignal = runtime.signal(signal);
@@ -83,8 +83,8 @@ export function registerGuardedBashTool(
         ...(reviewSignal === undefined ? {} : { signal: reviewSignal }),
       });
       if (decision.outcome === "deny") {
-        notifyPermissionDenied(ctx, "bash", decision.reviewReason);
-        if (decision.interruptTurn) ctx.abort();
+        notifyPermissionDenied(ctx, "bash", decision.reason, decision.reviewReason);
+        if (decision.reviewReason !== "cancelled" && decision.interruptTurn) ctx.abort();
         throw new Error(decision.message);
       }
 

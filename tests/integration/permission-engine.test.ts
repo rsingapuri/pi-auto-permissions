@@ -8,7 +8,11 @@ import {
   type GlobalState,
   type ReviewerSelection,
 } from "../../src/domain.ts";
-import { GUARDIAN_DENIAL_MESSAGE, GuardianReviewEngine } from "../../src/guardian/index.ts";
+import {
+  GUARDIAN_DENIAL_MESSAGE,
+  GUARDIAN_REVIEW_FAILURE_MESSAGE,
+  GuardianReviewEngine,
+} from "../../src/guardian/index.ts";
 import type { DangerousCommandDetector } from "../../src/policy/dangerous-command.ts";
 import { StaticPathPolicy } from "../../src/policy/path-policy.ts";
 import { PermissionEngine, type PermissionAction } from "../../src/runtime/index.ts";
@@ -458,7 +462,7 @@ describe("I6-I10 shell backend exhaustion", () => {
     await expect(engine.gate(action({ toolName: "bash", input: { command: "echo safe" } })))
       .resolves.toEqual({
         outcome: "deny",
-        message: GUARDIAN_DENIAL_MESSAGE,
+        message: GUARDIAN_REVIEW_FAILURE_MESSAGE,
         reason: "sandbox_unavailable",
         interruptTurn: false,
       });

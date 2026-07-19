@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
 	GUARDIAN_DENIAL_MESSAGE,
+	GUARDIAN_OPERATION_ABORTED_MESSAGE,
+	GUARDIAN_REVIEW_FAILURE_MESSAGE,
 	GUARDIAN_TOOLS,
 	GuardianModelError,
 	GuardianReviewEngine,
@@ -169,7 +171,12 @@ describe("Guardian fail-closed behavior", () => {
 
 		const result = await engine.review(input(captured));
 
-		expect(result).toMatchObject({ outcome: "deny", reason: "malformed_verdict", attempts: 3 });
+		expect(result).toMatchObject({
+			outcome: "deny",
+			reason: "malformed_verdict",
+			attempts: 3,
+			message: GUARDIAN_REVIEW_FAILURE_MESSAGE,
+		});
 		expect(callModel).toHaveBeenCalledTimes(3);
 	});
 
@@ -258,6 +265,12 @@ describe("Guardian fail-closed behavior", () => {
 			outcome: "deny",
 			reason: "cancelled",
 			attempts: 0,
+			message: GUARDIAN_OPERATION_ABORTED_MESSAGE,
+			interruptTurn: false,
+		});
+		expect(engine.circuitBreakerSnapshot("turn-1")).toMatchObject({
+			consecutiveDenials: 0,
+			recentDenials: 0,
 		});
 
 		const invalidThinking = binding({

@@ -17,6 +17,7 @@ import {
 } from "../domain.ts";
 import {
   GUARDIAN_DENIAL_MESSAGE,
+  GUARDIAN_REVIEW_FAILURE_MESSAGE,
   GuardianReviewEngine,
   guardianReviewBindingsEqual,
   type GuardianDenialReason,
@@ -471,9 +472,15 @@ function admit(route: PermissionExecutionRoute, reviewed: boolean): PermissionAd
 }
 
 function deny(reason: PermissionDenyDecision["reason"]): PermissionDenyDecision {
+  const message =
+    reason === "configuration_fault" ||
+    reason === "sandbox_unavailable" ||
+    reason === "stale_binding"
+      ? GUARDIAN_REVIEW_FAILURE_MESSAGE
+      : GUARDIAN_DENIAL_MESSAGE;
   return {
     outcome: "deny",
-    message: GUARDIAN_DENIAL_MESSAGE,
+    message,
     reason,
     interruptTurn: false,
   };
