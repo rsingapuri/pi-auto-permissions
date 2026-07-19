@@ -6,6 +6,7 @@ import type {
 	Api,
 	AssistantMessage,
 	Context,
+	Message,
 	Model,
 	ThinkingLevel,
 } from "@earendil-works/pi-ai";
@@ -20,15 +21,14 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
-	GUARDIAN_INVESTIGATION_TOOLS,
 	GUARDIAN_MAX_INVESTIGATION_ROUNDS,
-	GUARDIAN_OUTPUT_SCHEMA,
+	GUARDIAN_TOOLS,
 	GuardianModelError,
 	type GuardianModelRequest,
 } from "../../src/guardian/index.js";
 import {
+	PI_GUARDIAN_MAX_DECISION_REPROMPTS,
 	PI_GUARDIAN_MAX_OUTPUT_TOKENS,
-	PI_GUARDIAN_SCHEMA_PREAMBLE,
 	PI_MODEL_RUNTIME_COMPATIBILITY_VERSION,
 	createPiGuardianModelCall,
 } from "../../src/pi/model-reviewer.js";
@@ -60,17 +60,19 @@ function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
 }
 
 function response(
-	content: AssistantMessage["content"] = [{ type: "text", text: '{"outcome":"allow"}' }],
+	content?: AssistantMessage["content"],
 	overrides: Partial<AssistantMessage> = {},
 ): AssistantMessage {
 	return {
 		role: "assistant",
-		content,
+		content:
+			content ??
+			[{ type: "toolCall", id: "decision", name: "approve", arguments: {} }],
 		api: "test-api",
 		provider: "test-provider",
 		model: "guardian",
 		usage: ZERO_USAGE,
-		stopReason: "stop",
+		stopReason: content === undefined ? "toolUse" : "stop",
 		timestamp: 1,
 		...overrides,
 	};
@@ -83,8 +85,7 @@ function request(overrides: Partial<GuardianModelRequest> = {}): GuardianModelRe
 		reasoning: "high",
 		systemPrompt: "guardian system",
 		userPrompt: "assess this action",
-		outputSchema: GUARDIAN_OUTPUT_SCHEMA,
-		tools: GUARDIAN_INVESTIGATION_TOOLS,
+		tools: GUARDIAN_TOOLS,
 		investigationBudget: { reserve: () => true },
 		isCurrent: async () => true,
 		attempt: 1,
@@ -197,9 +198,7 @@ describe("Pi Guardian model adapter", () => {
 				new AbortController().signal,
 			),
 		).resolves.toEqual({ text: '{"outcome":"allow"}' });
-		expect(observed?.context.tools?.map((tool) => tool.name)).toEqual(
-			GUARDIAN_INVESTIGATION_TOOLS,
-		);
+		expect(observed?.context.tools?.map((tool) => tool.name)).toEqual(GUARDIAN_TOOLS);
 		expect(observed?.context.messages).toEqual([
 			{ role: "user", content: "assess this action", timestamp: 7 },
 		]);
@@ -210,16 +209,18 @@ describe("Pi Guardian model adapter", () => {
 		});
 	});
 
-	it("uses the exact catalog model, independent read-only context, schema, signal, and no provider retries", async () => {
+	it("uses the exact catalog model, minimal prompt, read-only context, signal, and no provider retries", async () => {
 		const seen: RuntimeCall[] = [];
 		const fixture = registryFixture({
 			complete: async (call) => {
 				seen.push(call);
-				return response([
-					{ type: "thinking", thinking: "private reasoning" },
-					{ type: "text", text: '{"outcome":' },
-					{ type: "text", text: '"allow"}' },
-				]);
+				return response(
+					[
+						{ type: "thinking", thinking: "private reasoning" },
+						{ type: "toolCall", id: "approve-1", name: "approve", arguments: {} },
+					],
+					{ stopReason: "toolUse" },
+				);
 			},
 		});
 		const signal = new AbortController().signal;
@@ -232,19 +233,53 @@ describe("Pi Guardian model adapter", () => {
 		expect(seen).toHaveLength(1);
 		expect(seen[0]?.model).toMatchObject({ provider: "test-provider", id: "guardian" });
 		expect(seen[0]?.context).toMatchObject({
-			systemPrompt: expect.stringContaining(PI_GUARDIAN_SCHEMA_PREAMBLE),
+			systemPrompt: "guardian system",
 			messages: [{ role: "user", content: "assess this action", timestamp: 42 }],
 		});
-		expect(seen[0]?.context.tools?.map((tool) => tool.name)).toEqual(
-			GUARDIAN_INVESTIGATION_TOOLS,
-		);
-		expect(seen[0]?.context.systemPrompt).toContain(JSON.stringify(GUARDIAN_OUTPUT_SCHEMA));
+		expect(seen[0]?.context.tools?.map((tool) => tool.name)).toEqual(GUARDIAN_TOOLS);
+		expect(seen[0]?.context.systemPrompt).not.toContain("schema");
 		expect(seen[0]?.options).toEqual({
 			signal,
 			maxTokens: PI_GUARDIAN_MAX_OUTPUT_TOKENS,
 			maxRetries: 0,
 			reasoning: "high",
 		});
+	});
+
+	it("uses decision tools and re-prompts text instead of parsing it", async () => {
+		let calls = 0;
+		let correction: Message | undefined;
+		const fixture = registryFixture({
+			complete: async ({ context }) => {
+				calls += 1;
+				if (calls === 1) return response([{ type: "text", text: '{"outcome":"allow"}' }]);
+				correction = context.messages.at(-1);
+				return response(
+					[{ type: "toolCall", id: "deny-1", name: "deny", arguments: {} }],
+					{ stopReason: "toolUse" },
+				);
+			},
+		});
+
+		await expect(
+			createPiGuardianModelCall(fixture.registry)(request(), new AbortController().signal),
+		).resolves.toEqual({ text: '{"outcome":"deny"}' });
+		expect(fixture.complete).toHaveBeenCalledTimes(2);
+		expect(correction).toMatchObject({
+			role: "user",
+			content: expect.stringContaining("approve or deny"),
+		});
+	});
+
+	it("bounds decision re-prompts when the model never calls a decision tool", async () => {
+		const fixture = registryFixture({
+			complete: async () => response([{ type: "text", text: "I approve" }]),
+		});
+		await expectPermanentFailure(
+			createPiGuardianModelCall(fixture.registry)(request(), new AbortController().signal),
+			"did not call exactly one decision tool",
+		);
+		expect(fixture.complete).toHaveBeenCalledTimes(PI_GUARDIAN_MAX_DECISION_REPROMPTS + 1);
 	});
 
 	it("maps off to no reasoning option while validating exact model support", async () => {

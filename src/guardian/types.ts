@@ -5,17 +5,10 @@
  */
 import type { ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 
-export type GuardianRiskLevel = "low" | "medium" | "high" | "critical";
-
-export type GuardianUserAuthorization = "unknown" | "low" | "medium" | "high";
-
 export type GuardianVerdictOutcome = "allow" | "deny";
 
 export interface GuardianVerdict {
 	readonly outcome: GuardianVerdictOutcome;
-	readonly riskLevel: GuardianRiskLevel;
-	readonly userAuthorization: GuardianUserAuthorization;
-	readonly rationale: string;
 }
 
 /**
@@ -63,6 +56,8 @@ export type GuardianTranscriptItem =
 	| { readonly kind: "developer" | "system"; readonly text: string };
 
 export type GuardianInvestigationToolName = "read" | "grep" | "find" | "ls";
+export type GuardianDecisionToolName = "approve" | "deny";
+export type GuardianToolName = GuardianInvestigationToolName | GuardianDecisionToolName;
 
 export interface GuardianInvestigationBudget {
 	/** Atomically reserve one investigation round and its calls. */
@@ -76,9 +71,8 @@ export interface GuardianModelRequest {
 	readonly reasoning: ThinkingLevel | undefined;
 	readonly systemPrompt: string;
 	readonly userPrompt: string;
-	readonly outputSchema: GuardianOutputSchema;
 	/** Fixed read-only tools available only to the independent reviewer. */
-	readonly tools: readonly GuardianInvestigationToolName[];
+	readonly tools: readonly GuardianToolName[];
 	/** Shared across all retry attempts for this one review. */
 	readonly investigationBudget: GuardianInvestigationBudget;
 	/** Revalidate the captured policy binding before each provider turn. */
@@ -94,27 +88,6 @@ export type GuardianModelCall = (
 	request: GuardianModelRequest,
 	signal: AbortSignal,
 ) => Promise<GuardianModelResponse>;
-
-export interface GuardianOutputSchema {
-	readonly type: "object";
-	readonly additionalProperties: false;
-	readonly properties: {
-		readonly risk_level: {
-			readonly type: "string";
-			readonly enum: readonly GuardianRiskLevel[];
-		};
-		readonly user_authorization: {
-			readonly type: "string";
-			readonly enum: readonly GuardianUserAuthorization[];
-		};
-		readonly outcome: {
-			readonly type: "string";
-			readonly enum: readonly GuardianVerdictOutcome[];
-		};
-		readonly rationale: { readonly type: "string" };
-	};
-	readonly required: readonly ["outcome"];
-}
 
 export type GuardianDenialReason =
 	| "model_denied"

@@ -42,12 +42,12 @@ export function registerPermissionToolGate(
       input: event.input,
       cwd: ctx.cwd,
       toolMetadata: canonicalToolMetadata(info, event.toolName),
-      builtInFileTool: isPiBuiltInFileTool(info, event),
+      trustedFileTool: isTrustedStandardFileTool(info, event),
       transcript: () => runtime.transcript(ctx),
       ...(reviewSignal === undefined ? {} : { signal: reviewSignal }),
     });
     if (decision.outcome === "admit") return;
-    notifyPermissionDenied(ctx, event.toolName);
+    notifyPermissionDenied(ctx, event.toolName, decision.reviewReason);
     if (decision.interruptTurn) ctx.abort();
     return { block: true, reason: decision.message };
   });
@@ -57,11 +57,12 @@ function findToolInfo(pi: ExtensionAPI, toolName: string): ToolInfo | undefined 
   return pi.getAllTools().find((candidate) => candidate.name === toolName);
 }
 
-function isPiBuiltInFileTool(info: ToolInfo | undefined, event: ToolCallEvent): boolean {
+function isTrustedStandardFileTool(info: ToolInfo | undefined, event: ToolCallEvent): boolean {
+  if (!DIRECT_FILE_TOOL_NAMES.has(event.toolName) || info === undefined) return false;
+  const { source, path } = info.sourceInfo;
   return (
-    DIRECT_FILE_TOOL_NAMES.has(event.toolName) &&
-    info?.sourceInfo.source === "builtin" &&
-    info.sourceInfo.path === `<builtin:${event.toolName}>`
+    (source === "builtin" && path === `<builtin:${event.toolName}>`) ||
+    (source === "sdk" && path === `<sdk:${event.toolName}>`)
   );
 }
 

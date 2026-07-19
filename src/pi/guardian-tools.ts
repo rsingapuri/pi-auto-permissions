@@ -42,8 +42,33 @@ const lsSchema = Type.Object({
 	limit: Type.Optional(Type.Number({ description: "Maximum entries to return" })),
 });
 
+const decisionSchema = Type.Object({}, { additionalProperties: false });
+
 function textResult(text: string): AgentToolResult<Record<string, never>> {
 	return { content: [{ type: "text", text }], details: {} };
+}
+
+/** Final-decision tools are intercepted by the model adapter and never executed. */
+export function createGuardianDecisionTools(): readonly AgentTool[] {
+	const approve: AgentTool<typeof decisionSchema, Record<string, never>> = {
+		name: "approve",
+		label: "Approve",
+		description: "Return the final allow decision.",
+		parameters: decisionSchema,
+		async execute() {
+			return textResult("allow");
+		},
+	};
+	const deny: AgentTool<typeof decisionSchema, Record<string, never>> = {
+		name: "deny",
+		label: "Deny",
+		description: "Return the final deny decision.",
+		parameters: decisionSchema,
+		async execute() {
+			return textResult("deny");
+		},
+	};
+	return [approve, deny];
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

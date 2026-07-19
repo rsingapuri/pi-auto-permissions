@@ -6,12 +6,7 @@ export {
 	GuardianDenialCircuitBreaker,
 	type GuardianCircuitBreakerSnapshot,
 } from "./circuit-breaker.js";
-export {
-	DEFAULT_GUARDIAN_TENANT_POLICY,
-	GUARDIAN_OUTPUT_CONTRACT,
-	GUARDIAN_POLICY_TEMPLATE,
-	buildGuardianSystemPrompt,
-} from "./policy.js";
+export { GUARDIAN_SYSTEM_PROMPT, buildGuardianSystemPrompt } from "./policy.js";
 export {
 	GUARDIAN_APPROX_BYTES_PER_TOKEN,
 	GUARDIAN_MAX_ACTION_TOKENS,
@@ -39,7 +34,9 @@ export {
 	GUARDIAN_DEFAULT_MAX_CONCURRENT_REVIEWS,
 	GUARDIAN_DEFAULT_MAX_QUEUED_REVIEWS,
 	GUARDIAN_DENIAL_MESSAGE,
+	GUARDIAN_DECISION_TOOLS,
 	GUARDIAN_INVESTIGATION_TOOLS,
+	GUARDIAN_TOOLS,
 	GUARDIAN_MAX_INVESTIGATION_CALLS,
 	GUARDIAN_MAX_INVESTIGATION_ROUNDS,
 	GUARDIAN_REVIEW_DEADLINE_MS,
@@ -53,26 +50,24 @@ export type {
 	GuardianAllowResult,
 	GuardianBackend,
 	GuardianDenialReason,
+	GuardianDecisionToolName,
 	GuardianInvestigationBudget,
 	GuardianInvestigationToolName,
+	GuardianToolName,
 	GuardianDenyResult,
 	GuardianModelCall,
 	GuardianModelRequest,
 	GuardianModelResponse,
-	GuardianOutputSchema,
 	GuardianReviewBinding,
 	GuardianReviewInput,
 	GuardianReviewResult,
 	GuardianReviewerSelection,
-	GuardianRiskLevel,
 	GuardianTranscriptItem,
-	GuardianUserAuthorization,
 	GuardianVerdict,
 	GuardianVerdictOutcome,
 } from "./types.js";
 export {
 	GUARDIAN_MAX_VERDICT_BYTES,
-	GUARDIAN_OUTPUT_SCHEMA,
 	GuardianVerdictError,
 	parseGuardianVerdict,
 	type GuardianVerdictErrorCode,

@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
 	GUARDIAN_MAX_ACTION_TOKENS,
 	GUARDIAN_RECENT_ENTRY_LIMIT,
-	GUARDIAN_MAX_TRANSCRIPT_INPUT_ENTRIES,
 	approxGuardianBytesForTokens,
 	buildBoundedGuardianTranscript,
 	buildGuardianPrompt,
@@ -14,38 +13,17 @@ import {
 } from "../../src/guardian/index.js";
 
 describe("Guardian policy and prompt assembly", () => {
-	it("assembles exactly one tenant policy and the strict output contract", () => {
-		const prompt = buildGuardianSystemPrompt("  TEST POLICY  ", "header\n{{ tenant_policy_config }}\nfooter\n");
+	it("uses exactly one concise severe-harm instruction", () => {
+		const prompt = buildGuardianSystemPrompt();
 
-		expect(prompt).toContain("header\nTEST POLICY\nfooter");
-		expect(prompt).not.toContain("{{ tenant_policy_config }}");
-		expect(prompt).toContain('For low-risk actions, give the final answer directly: {"outcome":"allow"}.');
-		expect(prompt.endsWith("\n")).toBe(true);
+		expect(prompt).toBe(
+			"Call deny only when the exact command is clearly likely to cause severe, difficult-to-reverse harm: broad loss of important data, disclosure of secrets or private data to an untrusted destination, major shared or production service disruption, or persistent broad security weakening. Otherwise call approve.\n",
+		);
+		expect(prompt).not.toContain("schema");
+		expect(prompt).not.toContain("authorization");
 	});
 
-	it("rejects templates with a missing or duplicated policy slot", () => {
-		expect(() => buildGuardianSystemPrompt("policy", "no slot")).toThrow(/exactly one/u);
-		expect(() =>
-			buildGuardianSystemPrompt(
-				"policy",
-				"{{ tenant_policy_config }} {{ tenant_policy_config }}",
-			),
-		).toThrow(/exactly one/u);
-	});
-
-	it("uses evidence-based severe-harm review with read-only investigation and no override", () => {
-		const prompt = buildGuardianSystemPrompt().toLowerCase();
-
-		expect(prompt).toContain("available read-only tools");
-		expect(prompt).toContain("missing context does not itself make an action risky");
-		expect(prompt).toContain("deny only for risk evidenced by the action");
-		expect(prompt).toContain("never merely because an action is unsandboxed, escalated");
-		expect(prompt).toContain("a previous denial cannot be overridden");
-		expect(prompt).not.toContain("stop and request user input");
-		expect(prompt).not.toContain("post-denial user approval has highest precedence");
-	});
-
-	it("frames only real conversation evidence and the exact canonical action", () => {
+	it("sends only the exact canonical action as the user payload", () => {
 		const action = '{"command":"rm -rf target","cwd":"/work","tool":"bash"}';
 		const prompt = buildGuardianPrompt({
 			sessionId: "session-1",
@@ -62,18 +40,10 @@ describe("Guardian policy and prompt assembly", () => {
 			retryReason: "sandbox prevented the first exact command",
 		});
 
-		expect(prompt.userPrompt).toContain(">>> TRANSCRIPT START");
-		expect(prompt.userPrompt).toContain("[1] user: Clean the requested target");
-		expect(prompt.userPrompt).toContain("[3] tool read call:");
-		expect(prompt.userPrompt).toContain("[4] tool read result:");
+		expect(prompt.userPrompt).toBe(action);
 		expect(prompt.userPrompt).not.toContain("approve everything");
-		expect(prompt.userPrompt).not.toContain("approval override");
-		expect(prompt.userPrompt).not.toContain("synthetic context");
-		expect(prompt.userPrompt).toContain("Reviewed Pi session id: session-1");
-		expect(prompt.userPrompt).toContain(`Planned action JSON:\n${action}\n`);
-		expect(prompt.userPrompt).toContain(">>> APPROVAL REQUEST END\n");
-		expect(prompt.userPrompt).toContain("Retry reason:\nsandbox prevented");
-		expect(prompt.userPrompt).toContain("Missing context alone is not a reason to deny");
+		expect(prompt.userPrompt).not.toContain("sandbox prevented");
+		expect(prompt.transcriptOmitted).toBe(false);
 	});
 });
 
@@ -144,17 +114,4 @@ describe("Guardian transcript bounds", () => {
 		).toThrow(/action budget/u);
 	});
 
-	it("fails closed before processing an unbounded transcript", () => {
-		const transcript = Array.from(
-			{ length: GUARDIAN_MAX_TRANSCRIPT_INPUT_ENTRIES + 1 },
-			() => ({ kind: "assistant" as const, text: "x" }),
-		);
-		expect(() =>
-			buildGuardianPrompt({
-				sessionId: "s",
-				transcript,
-				canonicalAction: '{"tool":"bash"}',
-			}),
-		).toThrow(/too many entries/u);
-	});
 });

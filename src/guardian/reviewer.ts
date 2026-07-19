@@ -23,7 +23,7 @@ import type {
 	GuardianReviewerSelection,
 	GuardianVerdict,
 } from "./types.js";
-import { GUARDIAN_OUTPUT_SCHEMA, GuardianVerdictError, parseGuardianVerdict } from "./verdict.js";
+import { GuardianVerdictError, parseGuardianVerdict } from "./verdict.js";
 
 export const GUARDIAN_DENIAL_MESSAGE =
 	"Permission denied. This action was not executed. No override will be requested. Choose a materially safer action.";
@@ -48,6 +48,11 @@ export const GUARDIAN_INVESTIGATION_TOOLS = Object.freeze([
 	"grep",
 	"find",
 	"ls",
+] as const);
+export const GUARDIAN_DECISION_TOOLS = Object.freeze(["approve", "deny"] as const);
+export const GUARDIAN_TOOLS = Object.freeze([
+	...GUARDIAN_INVESTIGATION_TOOLS,
+	...GUARDIAN_DECISION_TOOLS,
 ] as const);
 
 class GuardianDeadlineError extends Error {
@@ -437,8 +442,7 @@ export class GuardianReviewEngine {
 							: prepared.binding.reviewer.thinkingLevel,
 					systemPrompt: prepared.prompt.systemPrompt,
 					userPrompt: prepared.prompt.userPrompt,
-					outputSchema: GUARDIAN_OUTPUT_SCHEMA,
-					tools: GUARDIAN_INVESTIGATION_TOOLS,
+					tools: GUARDIAN_TOOLS,
 					investigationBudget: prepared.investigationBudget,
 					isCurrent: async () => {
 						try {

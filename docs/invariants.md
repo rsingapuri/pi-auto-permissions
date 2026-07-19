@@ -41,9 +41,8 @@ The proof assumes:
    revision watermarks is a hostile-local-process case and is outside scope; the
    store refuses to guess a revision in that state.
 
-Third-party tools are policy-reviewed when Pi exposes them through `tool_call`,
-but their implementation is the installing user's responsibility and is not
-claimed to be OS-sandboxed.
+Third-party/custom tools are passed through as user-installed trusted
+implementations. They are not model-reviewed or claimed to be OS-sandboxed.
 
 ## 2. State
 
@@ -227,38 +226,48 @@ whose controlling read is after that commit must use the new state.
 
 An Auto review admits an action only if all of the following hold:
 
-1. the selected model returned an exactly valid `allow` verdict;
+1. the selected model called exactly one valid final `approve` tool;
 2. the request was not aborted and its session is alive;
 3. the current reviewer model and thinking level equal the captured tuple;
 4. current global and session revisions equal the captured revisions;
 5. the current backend equals the captured backend;
 6. the current canonical request equals the reviewed canonical request.
 
-All other outcomes deny: explicit deny, `ask`, malformed output, missing model,
-missing credentials, timeout, cancellation, queue exhaustion, oversized input,
-provider failure, internal exception, revision change, backend change, or request
-change. There is no fallback model and no conversion to Unrestricted.
+All other outcomes deny: a valid `deny` call, exhausted decision re-prompts,
+missing model, missing credentials, timeout, cancellation, queue exhaustion,
+oversized input, provider failure, internal exception, revision change, backend
+change, or request change. There is no fallback model and no conversion to
+Unrestricted.
 
-During a review, the independent reviewer may call only fixed `read`, `grep`,
-`find`, and `ls` implementations, resolved against the session cwd. These calls
-are evidence gathering, not execution of the reviewed action; they expose no
-mutation, shell, or network capability. They use bounded Node filesystem
-operations and never execute or download search helpers. One review
-permits at most four tool rounds and eight calls cumulatively across all retry
-attempts, all within the same aggregate deadline. Missing local
-context is not policy evidence of danger: the reviewer investigates when the
-fact is material and otherwise denies only concretely evidenced severe,
-irreversible risk.
+The reviewer's complete semantic policy is: `Call deny only when the exact
+command is clearly likely to cause severe, difficult-to-reverse harm: broad loss
+of important data, disclosure of secrets or private data to an untrusted
+destination, major shared or production service disruption, or persistent broad
+security weakening. Otherwise call approve.` No schema, taxonomy, tenant policy,
+authorization rubric, or output-contract preamble is sent. The user payload is
+only the exact canonical shell action; no conversation transcript, retry
+rationale, or session metadata is sent. The independent reviewer may call only
+fixed `read`, literal `grep`, `find`, and `ls` implementations resolved against
+the session cwd, plus final `approve` and `deny` decision tools. Read-only calls
+expose no mutation, shell, or network capability and never execute or download
+search helpers. Text answers, missing decisions, multiple decisions, and mixed
+investigation/decision calls are re-prompted at most twice; only one valid final
+decision call is accepted. One review permits at most four investigation rounds
+and eight investigation calls cumulatively across all retry attempts, all
+within the same aggregate deadline.
 
 ## 4. Admission function
 
-For a healthy enabled Auto session, classify built-ins as follows.
+For a healthy enabled Auto session, classify trusted standard file tools as
+follows. A standard identity is either Pi's exact `<builtin:name>` identity or
+the host SDK's exact `<sdk:name>` identity; extension/package tools cannot claim
+either source identity through normal registration.
 
 ### 4.1 Read-only file tools
 
-`read`, `grep`, `find`, and `ls` are admitted without model review. This matches
-the broad-read property of Codex workspace-write and cannot directly create a
-filesystem, process, or network side effect.
+Trusted standard `read`, `grep`, `find`, and `ls` are admitted without model
+review. This matches the broad-read property of Codex workspace-write and cannot
+directly create a filesystem, process, or network side effect.
 
 ### 4.2 Direct mutation tools
 
@@ -266,22 +275,20 @@ For `write` and `edit`, let `target` be the canonical target resolved against
 `cwd`, including existing symlinks or the nearest existing ancestor for a path
 that does not yet exist.
 
-`target` is statically admitted exactly when it is inside a writable root and is
-not inside a protected metadata path. Writable roots are the session workspace,
-the OS temporary directory, and `/tmp` where present. Protected metadata includes
-top-level `.git`, resolved Git directories, `.agents`, `.codex`, and `.pi`.
-
-Every other direct mutation is reviewed before the built-in executes. A denial
-therefore causes zero effects from that tool call.
+The path classifier identifies writable roots, conventional protected metadata,
+and the extension's private control-plane roots. Every trusted standard target
+except the extension's own state/lock paths is admitted without model review;
+workspace location and metadata classification do not route direct tools to
+Guardian.
 
 If the path policy cannot be constructed at session startup, the installed
-fallback admits only the known read-only built-ins and statically denies direct
+fallback admits only the known read-only standard tools and statically denies direct
 mutations. It does not guess a writable path or ask the reviewer to compensate
 for missing path classification.
 
-One narrower control-plane rule precedes this classification: Pi direct-file
-tools may never mutate the extension's durable state or lock paths in Auto.
-Those targets are statically denied without consulting the reviewer. This
+One narrower control-plane rule precedes this classification: trusted standard
+direct-file tools may never mutate the extension's durable state or lock paths
+in Auto. Those targets are statically denied without consulting the reviewer. This
 prevents an ordinary `write`/`edit` call from turning an action review into a
 permission-setting mutation.
 
@@ -321,9 +328,8 @@ fault may reduce availability but cannot silently reduce enforcement.
 
 ### 4.6 Third-party tools
 
-Unknown/custom tools are reviewed using their Pi-exposed name, description,
-schema/source metadata, arguments, cwd, and conversation context. An allow lets
-Pi call the trusted implementation; every non-allow blocks it. OS containment of
+Unknown/custom tools pass through without Guardian review. Installing and
+trusting their implementation is the user's responsibility; OS containment of
 the implementation is explicitly outside scope.
 
 ### 4.7 Bypass states
@@ -335,8 +341,8 @@ extension's review or sandbox. They are deliberate user-authorized bypasses.
 attempt a safe repair or deliberately choose Unrestricted. Repair refuses when
 neither watermark is valid enough to prove a monotonic next revision.
 
-`Unavailable` affects shell routing only: Auto direct-file and third-party tool
-policy still operates, while every model-originated `bash` call is denied with an
+`Unavailable` affects shell routing only: non-shell passthrough and static
+control-plane protection still operate, while every model-originated `bash` call is denied with an
 infrastructure-specific safer-action result.
 
 If construction of the permission engine itself fails after subsystem startup,
@@ -412,10 +418,10 @@ failure.
 ### I10. Fail-closed invariant
 
 Review-protocol, binding, configuration, and containment uncertainty in a
-guarded Auto path maps to denial before execution. Missing evidence about an
-action does not itself establish dangerousness; the Guardian may investigate it
-with bounded read-only tools. Classification uncertainty maps to Guardian review
-or denial, never directly to unreviewed execution.
+guarded Auto shell path maps to denial before execution. Missing evidence about
+a shell action does not itself establish dangerousness; the Guardian may
+investigate it with bounded read-only tools. Direct-file classification
+uncertainty maps to deterministic denial, never model review.
 ReviewOnly is selected only by a positive unsupported-platform classification;
 neither path ever maps to Unrestricted.
 
@@ -470,10 +476,11 @@ to OS/provider scheduler progress, the extension cannot deadlock or retry foreve
 
 ### I16. Denial-loop invariant
 
-Three consecutive permission denials, or ten denials in the latest fifty guarded
-Auto decisions in one active permission runtime and turn, interrupt the turn.
-Any admitted Auto decision resets the consecutive count. Interruption remains
-sticky until turn end. Catastrophic pre-runtime initialization failure has no
+Three consecutive shell permission denials, or ten denials in the latest fifty
+shell Auto decisions in one active permission runtime and turn, interrupt later
+shell actions in that turn. An admitted Auto shell decision resets the
+consecutive count. Interruption remains sticky for shell routing until turn end;
+it never blocks a non-shell passthrough action. Catastrophic pre-runtime initialization failure has no
 Guardian state to count against; its gates still deny every call and the
 extension itself performs no retry.
 
@@ -531,8 +538,8 @@ action review cannot produce an approval dialog.
 
 Each review attempt and total review have finite deadlines and attempt bounds.
 Each action has terminal states and is never internally replayed. Across model
-actions in an active permission runtime, every guarded Auto denial—including
-pre-review denials—feeds the finite denial circuit breaker. Catastrophic
+shell actions in an active permission runtime, every Auto shell denial—including
+pre-review shell denials—feeds the finite denial circuit breaker. Catastrophic
 pre-runtime failure has no review engine, but its outer gates only return denial
 and never retry. Thus the extension itself has no infinite retry path.
 

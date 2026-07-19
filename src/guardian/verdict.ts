@@ -5,32 +5,12 @@
  */
 import { Buffer } from "node:buffer";
 
-import type {
-	GuardianOutputSchema,
-	GuardianRiskLevel,
-	GuardianUserAuthorization,
-	GuardianVerdict,
-	GuardianVerdictOutcome,
-} from "./types.js";
+import type { GuardianVerdict, GuardianVerdictOutcome } from "./types.js";
 
 export const GUARDIAN_MAX_VERDICT_BYTES = 16_384;
 
-const RISK_LEVELS = Object.freeze(["low", "medium", "high", "critical"] as const);
-const AUTHORIZATION_LEVELS = Object.freeze(["unknown", "low", "medium", "high"] as const);
 const OUTCOMES = Object.freeze(["allow", "deny"] as const);
-const ALLOWED_KEYS = new Set(["risk_level", "user_authorization", "outcome", "rationale"]);
-
-export const GUARDIAN_OUTPUT_SCHEMA: GuardianOutputSchema = Object.freeze({
-	type: "object",
-	additionalProperties: false,
-	properties: Object.freeze({
-		risk_level: Object.freeze({ type: "string", enum: RISK_LEVELS }),
-		user_authorization: Object.freeze({ type: "string", enum: AUTHORIZATION_LEVELS }),
-		outcome: Object.freeze({ type: "string", enum: OUTCOMES }),
-		rationale: Object.freeze({ type: "string" }),
-	}),
-	required: Object.freeze(["outcome"] as const),
-});
+const ALLOWED_KEYS = new Set(["outcome"]);
 
 export type GuardianVerdictErrorCode =
 	| "empty"
@@ -40,10 +20,7 @@ export type GuardianVerdictErrorCode =
 	| "duplicate_field"
 	| "unknown_field"
 	| "missing_outcome"
-	| "invalid_outcome"
-	| "invalid_risk_level"
-	| "invalid_authorization"
-	| "invalid_rationale";
+	| "invalid_outcome";
 
 export class GuardianVerdictError extends Error {
 	readonly code: GuardianVerdictErrorCode;
@@ -57,14 +34,6 @@ export class GuardianVerdictError extends Error {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isRiskLevel(value: unknown): value is GuardianRiskLevel {
-	return typeof value === "string" && (RISK_LEVELS as readonly string[]).includes(value);
-}
-
-function isAuthorization(value: unknown): value is GuardianUserAuthorization {
-	return typeof value === "string" && (AUTHORIZATION_LEVELS as readonly string[]).includes(value);
 }
 
 function isOutcome(value: unknown): value is GuardianVerdictOutcome {
@@ -182,30 +151,5 @@ export function parseGuardianVerdict(text: string): GuardianVerdict {
 	if (!isOutcome(parsed.outcome)) {
 		throw new GuardianVerdictError("invalid_outcome", "Guardian outcome must be allow or deny");
 	}
-	const outcome = parsed.outcome;
-
-	if (parsed.risk_level !== undefined && !isRiskLevel(parsed.risk_level)) {
-		throw new GuardianVerdictError("invalid_risk_level", "Guardian risk_level was invalid");
-	}
-	if (parsed.user_authorization !== undefined && !isAuthorization(parsed.user_authorization)) {
-		throw new GuardianVerdictError(
-			"invalid_authorization",
-			"Guardian user_authorization was invalid",
-		);
-	}
-	if (parsed.rationale !== undefined && typeof parsed.rationale !== "string") {
-		throw new GuardianVerdictError("invalid_rationale", "Guardian rationale must be a string");
-	}
-
-	const riskLevel = parsed.risk_level ?? (outcome === "allow" ? "low" : "high");
-	const userAuthorization = parsed.user_authorization ?? "unknown";
-	const suppliedRationale = parsed.rationale?.trim();
-	const rationale =
-		suppliedRationale === undefined || suppliedRationale.length === 0
-			? outcome === "allow"
-				? "Auto-review returned a low-risk allow decision."
-				: "Auto-review returned a deny decision without a rationale."
-			: suppliedRationale;
-
-	return { outcome, riskLevel, userAuthorization, rationale };
+	return { outcome: parsed.outcome };
 }

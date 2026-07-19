@@ -145,6 +145,14 @@ function action(overrides: Partial<PermissionAction> = {}): PermissionAction {
   };
 }
 
+function reviewedShellAction(overrides: Partial<PermissionAction> = {}): PermissionAction {
+  return action({
+    toolName: "bash",
+    input: { command: "echo reviewed", sandbox_permissions: "require_escalated" },
+    ...overrides,
+  });
+}
+
 function safeDetector(): DangerousCommandDetector {
   return { detect: () => undefined, close: vi.fn() };
 }
@@ -311,7 +319,7 @@ describe("I1-I4 mode and global-state routing", () => {
   });
 });
 
-describe("I5 static file classification and custom review", () => {
+describe("I5 deterministic file routing and custom passthrough", () => {
   it.each(["read", "grep", "find", "ls"])("admits Pi built-in %s without review", async (toolName) => {
     const { engine, callModel } = await harness();
     await expect(engine.gate(action({ toolName, builtInFileTool: true, input: { path: "x" } })))
@@ -319,7 +327,7 @@ describe("I5 static file classification and custom review", () => {
     expect(callModel).not.toHaveBeenCalled();
   });
 
-  it("admits in-root built-in writes but reviews protected/outside writes", async () => {
+  it("admits trusted writes without model review while preserving static hard denials", async () => {
     const { engine, callModel } = await harness();
     await expect(engine.gate(action({
       toolName: "write",
@@ -331,41 +339,45 @@ describe("I5 static file classification and custom review", () => {
       toolName: "write",
       builtInFileTool: true,
       input: { path: path.join(outside, "escape"), content: "no" },
-    }))).resolves.toMatchObject({ outcome: "admit", reviewed: true });
+    }))).resolves.toMatchObject({ outcome: "admit", reviewed: false });
     await expect(engine.gate(action({
       toolCallId: "call-3",
       toolName: "edit",
       builtInFileTool: true,
       input: { path: ".git/config", edits: [] },
-    }))).resolves.toMatchObject({ outcome: "admit", reviewed: true });
-    expect(callModel).toHaveBeenCalledTimes(2);
+    }))).resolves.toMatchObject({ outcome: "admit", reviewed: false });
+    expect(callModel).not.toHaveBeenCalled();
   });
 
-  it("reviews a third-party override even when it uses a built-in file-tool name", async () => {
+  it("passes through a third-party override even when it uses a standard file-tool name", async () => {
     const { engine, callModel } = await harness();
     await expect(engine.gate(action({ toolName: "read", builtInFileTool: false })))
-      .resolves.toMatchObject({ outcome: "admit", reviewed: true });
-    expect(callModel).toHaveBeenCalledOnce();
+      .resolves.toMatchObject({ outcome: "admit", reviewed: false });
+    expect(callModel).not.toHaveBeenCalled();
   });
 
-  it("returns the invariant denial and creates no admission on model deny", async () => {
+  it("returns the invariant denial and creates no admission on shell-review deny", async () => {
     const { engine } = await harness({ verdict: "deny" });
-    await expect(engine.gate(action())).resolves.toEqual({
+    await expect(engine.gate(action({
+      toolName: "bash",
+      input: { command: "echo safe", sandbox_permissions: "require_escalated" },
+    }))).resolves.toEqual({
       outcome: "deny",
       message: GUARDIAN_DENIAL_MESSAGE,
       reason: "review_denied",
+      reviewReason: "model_denied",
       interruptTurn: false,
     });
   });
 
-  it("continues reviewing non-shell tools when the supported sandbox is unavailable", async () => {
+  it("passes through non-shell tools when the supported sandbox is unavailable", async () => {
     const { engine, callModel } = await harness({ backend: "unavailable" });
     await expect(engine.gate(action())).resolves.toMatchObject({
       outcome: "admit",
       route: "passthrough",
-      reviewed: true,
+      reviewed: false,
     });
-    expect(callModel).toHaveBeenCalledOnce();
+    expect(callModel).not.toHaveBeenCalled();
   });
 
   it("denies extension control-plane paths without consulting the reviewer", async () => {
@@ -489,7 +501,7 @@ describe("I6-I10 shell backend exhaustion", () => {
 describe("I8/I14 exact stale binding", () => {
   it("binds the selected thinking level into the model request", async () => {
     const { engine, callModel } = await harness();
-    await engine.gate(action());
+    await engine.gate(reviewedShellAction());
     expect(callModel.mock.calls[0]?.[0]).toMatchObject({
       provider: REVIEWER.provider,
       modelId: REVIEWER.modelId,
@@ -503,7 +515,7 @@ describe("I8/I14 exact stale binding", () => {
       onModelCall: () => store.replaceReviewer({ ...REVIEWER, thinkingLevel: "xhigh" }),
     });
     store = built.store;
-    await expect(built.engine.gate(action())).resolves.toMatchObject({
+    await expect(built.engine.gate(reviewedShellAction())).resolves.toMatchObject({
       outcome: "deny",
       reason: "review_denied",
     });
@@ -511,11 +523,11 @@ describe("I8/I14 exact stale binding", () => {
 
   it("denies argument mutation, mode ABA, backend change, and session death", async () => {
     for (const mutation of ["arguments", "mode-aba", "backend", "shutdown"] as const) {
-      const input = { value: 1 };
+      const input = { command: "echo reviewed", sandbox_permissions: "require_escalated" };
       let engine!: PermissionEngine;
       const built = await harness({
         onModelCall: async () => {
-          if (mutation === "arguments") input.value = 2;
+          if (mutation === "arguments") input.command = "echo mutated";
           if (mutation === "mode-aba") {
             await engine.setRequestedMode("unrestricted");
             await engine.setRequestedMode("auto");
@@ -525,7 +537,7 @@ describe("I8/I14 exact stale binding", () => {
         },
       });
       engine = built.engine;
-      await expect(engine.gate(action({ input }))).resolves.toMatchObject({ outcome: "deny" });
+      await expect(engine.gate(reviewedShellAction({ input }))).resolves.toMatchObject({ outcome: "deny" });
     }
   });
 
@@ -584,7 +596,7 @@ describe("I8/I14 exact stale binding", () => {
     await expect(pending).resolves.toMatchObject({ outcome: "deny", reason: "stale_binding" });
   });
 
-  it("I16 never admits a delayed static action after parallel denials interrupt its turn", async () => {
+  it("I16 shell denial breakers never block a delayed non-shell static action", async () => {
     let releaseClassification: (() => void) | undefined;
     let classificationStarted!: () => void;
     const started = new Promise<void>((resolve) => {
@@ -640,9 +652,9 @@ describe("I8/I14 exact stale binding", () => {
 
     releaseClassification?.();
     await expect(pending).resolves.toMatchObject({
-      outcome: "deny",
-      reason: "review_denied",
-      interruptTurn: true,
+      outcome: "admit",
+      route: "passthrough",
+      reviewed: false,
     });
     expect(guardian.circuitBreakerSnapshot(sharedTurn)).toMatchObject({
       consecutiveDenials: 3,

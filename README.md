@@ -147,42 +147,51 @@ Auto classifies the final Pi tool call visible to this extension:
 
 | Action | Auto behavior |
 | --- | --- |
-| Pi's built-in `read`, `grep`, `find`, `ls` | Statically admitted. |
-| Pi's built-in `write` and `edit` within the workspace or OS temporary roots | Statically admitted unless the resolved target is protected metadata. |
-| Other built-in `write` and `edit` targets | Reviewed before the direct file tool runs. |
-| Built-in `write` and `edit` targeting this extension's state/lock paths | Statically denied in Auto without model review. |
+| Pi built-in or trusted SDK-backed `read`, `grep`, `find`, `ls` | Statically admitted. |
+| Pi built-in or trusted SDK-backed `write` and `edit` | Admitted without model review after deterministic path classification. |
+| Trusted standard `write` and `edit` targeting this extension's state/lock paths | Statically denied in Auto without model review. |
 | Ordinary `bash` on healthy macOS/Linux | Runs once in the fixed OS sandbox. |
 | Codex-dangerous `bash` with the default sandbox permission | Reviewed; an exact allow runs once inside the fixed sandbox. |
 | A `bash` call with `sandbox_permissions: "require_escalated"` | Reviewed; an exact allow runs once with normal host permissions. |
 | Any `bash` on an unsupported OS (including WSL1) | Reviewed; an exact allow runs once with normal host permissions. |
 | Any `bash` after a supported macOS/Linux sandbox failure | Denied before review or process creation. |
-| Third-party/custom tool | Reviewed; an exact allow invokes its trusted implementation without OS containment. |
+| Third-party/custom tool | Admitted as a user-installed trusted implementation; never sent to Guardian. |
 
-Static mutation admission resolves existing symlinks and the nearest existing
-ancestor of a new path. Workspace `.git`, resolved Git directories, `.agents`,
-`.codex`, and `.pi` are protected. The sandbox allows broad filesystem reads,
+Static mutation classification resolves existing symlinks and the nearest
+existing ancestor of a new path so the extension can protect its own state and
+lock paths without model review. Other trusted direct-file targets pass through.
+The sandbox allows broad filesystem reads,
 writes only to the workspace and temporary roots, keeps protected metadata and
 the extension's durable state read-only, denies network and local binding, and
 applies to descendant processes.
 
 If direct-file path policy construction fails at startup, the fallback admits
-only the four known read-only built-ins and statically denies every `write` or
+only the four known read-only standard tools and statically denies every `write` or
 `edit`. It does not guess path safety or ask the reviewer to replace missing
 classification.
 
-The reviewer sees a bounded conversation transcript and one canonical action.
-It may investigate material local facts with fixed read-only `read`, `grep`,
-`find`, and `ls` tools. These bounded implementations use only Node filesystem
-operations and never execute or download search helpers. Investigation is bounded to
-four tool rounds and eight calls cumulatively across all retry attempts within
-the review's aggregate deadline. The policy defaults to
-allow and reserves denial for evidenced severe, irreversible harm; missing
-context or escalation alone is not grounds for denial. Its final result must be
-exact schema-valid JSON; `ask`, prose, malformed output, timeouts, missing
-credentials, provider errors, cancellation, state changes, and every other
-non-allow outcome all deny. Reviews have one aggregate 90-second deadline, at
-most three verdict attempts and seven total provider turns, and denial circuit
-breakers to prevent loops.
+Only reviewed shell actions reach the reviewer. Its complete semantic policy is:
+
+> Call deny only when the exact command is clearly likely to cause severe,
+> difficult-to-reverse harm: broad loss of important data, disclosure of secrets
+> or private data to an untrusted destination, major shared or production service
+> disruption, or persistent broad security weakening. Otherwise call approve.
+
+No JSON schema, taxonomy, tenant policy, authorization rubric, or output-contract
+preamble is sent to the model. The user payload is only the exact canonical
+shell action; no conversation transcript, retry rationale, or session metadata
+is sent. The reviewer has fixed read-only `read`, literal `grep`, `find`, and
+`ls` tools plus final `approve` and `deny` decision tools. Investigation is
+bounded to four rounds and eight calls cumulatively across all retry attempts.
+Text answers, missing decisions, multiple decisions, and decision calls mixed
+with investigation calls are re-prompted up to twice; only one valid decision
+tool call is accepted. The adapter converts that structured call into a local
+one-field verdict. Exhausted re-prompts, timeouts, missing credentials, provider
+errors, cancellation, state changes, and every other non-allow outcome deny.
+Reviews have one aggregate 90-second deadline, at most three retryable model
+attempts, and denial circuit breakers to prevent loops. The model always sees
+one fixed denial message, while the user notification identifies whether the
+reviewer actually called `deny` or failed for a protocol/runtime reason.
 
 A sandbox rejection is returned as an ordinary tool error. The extension does
 not replay a command that may have started. The model may issue a different
@@ -229,9 +238,10 @@ limits are:
 - Sandboxed shell commands and the reviewer's bounded investigation tools have
   broad read access. Read evidence is sent to the selected reviewer provider;
   this extension is not a general secret-reading boundary.
-- Reviewed escalated shell commands, reviewed out-of-root direct file writes,
-  and reviewed custom tools execute without OS containment after an allow.
-- Third-party tool implementations and other loaded Pi extensions are trusted.
+- Reviewed escalated shell commands execute without OS containment after an
+  allow.
+- Direct-file and third-party tool implementations, SDK host tools, and other
+  loaded Pi extensions are trusted.
   They can have surprising effects, and this extension cannot sandbox their
   implementation or stop a later extension from deliberately bypassing it.
 - Pi's user-entered `!` and `!!` shell commands are explicit user actions and

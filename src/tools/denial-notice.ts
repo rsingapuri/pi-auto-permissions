@@ -7,9 +7,14 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 export function notifyPermissionDenied(
   ctx: Pick<ExtensionContext, "ui">,
   toolName: string,
+  reviewReason?: string,
 ): void {
   try {
-    ctx.ui.notify(`Permission denied: ${toolName} action was not executed.`, "warning");
+    const diagnostic = reviewReason === undefined ? "" : ` Guardian result: ${reviewReason}.`;
+    ctx.ui.notify(
+      `Permission denied: ${toolName} action was not executed.${diagnostic}`,
+      "warning",
+    );
   } catch {
     // A notification failure must not change the fixed fail-closed denial.
   }

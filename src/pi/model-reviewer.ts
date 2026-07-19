@@ -20,15 +20,19 @@ import {
 import { Check } from "typebox/value";
 
 import {
-	GUARDIAN_INVESTIGATION_TOOLS,
+	GUARDIAN_DECISION_TOOLS,
 	GUARDIAN_MAX_TOOL_ENTRY_TOKENS,
+	GUARDIAN_TOOLS,
 	GuardianModelError,
 	truncateGuardianText,
 	type GuardianModelCall,
 	type GuardianModelRequest,
 	type GuardianModelResponse,
 } from "../guardian/index.js";
-import { createGuardianInvestigationTools } from "./guardian-tools.js";
+import {
+	createGuardianDecisionTools,
+	createGuardianInvestigationTools,
+} from "./guardian-tools.js";
 
 /**
  * Pi 0.80.10 exposes model lookup and auth through ModelRegistry, but not model
@@ -39,9 +43,7 @@ import { createGuardianInvestigationTools } from "./guardian-tools.js";
  */
 export const PI_MODEL_RUNTIME_COMPATIBILITY_VERSION = "0.80.10";
 export const PI_GUARDIAN_MAX_OUTPUT_TOKENS = 8_192;
-
-export const PI_GUARDIAN_SCHEMA_PREAMBLE =
-	"The final response must validate against this exact JSON Schema (the caller will reject any non-conforming response):";
+export const PI_GUARDIAN_MAX_DECISION_REPROMPTS = 2;
 
 interface CompatibleModelRuntime {
 	completeSimple: ModelRuntime["completeSimple"];
@@ -99,8 +101,8 @@ function assertReviewerRequest(request: GuardianModelRequest): void {
 		typeof request.systemPrompt !== "string" ||
 		typeof request.userPrompt !== "string" ||
 		!Array.isArray(request.tools) ||
-		request.tools.length !== GUARDIAN_INVESTIGATION_TOOLS.length ||
-		request.tools.some((name, index) => name !== GUARDIAN_INVESTIGATION_TOOLS[index]) ||
+		request.tools.length !== GUARDIAN_TOOLS.length ||
+		request.tools.some((name, index) => name !== GUARDIAN_TOOLS[index]) ||
 		typeof request.investigationBudget !== "object" ||
 		request.investigationBudget === null ||
 		typeof request.investigationBudget.reserve !== "function" ||
@@ -121,19 +123,6 @@ function assertThinkingSupported(model: Model<Api>, request: GuardianModelReques
 			`Reviewer ${request.provider}/${request.modelId} does not support thinking level ${level}`,
 		);
 	}
-}
-
-function structuredSystemPrompt(request: GuardianModelRequest): string {
-	let schema: string | undefined;
-	try {
-		schema = JSON.stringify(request.outputSchema);
-	} catch (error) {
-		throw permanentModelError("Guardian output schema is not serializable", error);
-	}
-	if (typeof schema !== "string" || schema.length === 0) {
-		throw permanentModelError("Guardian output schema is unavailable");
-	}
-	return `${request.systemPrompt.trimEnd()}\n\n${PI_GUARDIAN_SCHEMA_PREAMBLE}\n${schema}\n`;
 }
 
 function validatedResponse(
@@ -159,12 +148,17 @@ function responseToolCalls(message: AssistantMessage): ToolCall[] {
 	return message.content.filter((block): block is ToolCall => block.type === "toolCall");
 }
 
-function finalResponseText(message: AssistantMessage): GuardianModelResponse {
-	const text: string[] = [];
-	for (const block of message.content) {
-		if (block.type === "text") text.push(block.text);
-	}
-	return { text: text.join("") };
+function isDecisionTool(call: ToolCall): boolean {
+	return (GUARDIAN_DECISION_TOOLS as readonly string[]).includes(call.name);
+}
+
+function hasEmptyArguments(call: ToolCall): boolean {
+	return (
+		call.arguments !== null &&
+		typeof call.arguments === "object" &&
+		!Array.isArray(call.arguments) &&
+		Object.keys(call.arguments).length === 0
+	);
 }
 
 function toolResultText(error: unknown): TextContent[] {
@@ -253,6 +247,8 @@ export function createPiGuardianModelCall(
 ): GuardianModelCall {
 	const now = options.now ?? Date.now;
 	const investigationTools = createGuardianInvestigationTools(options.cwd ?? process.cwd());
+	const decisionTools = createGuardianDecisionTools();
+	const allTools = [...investigationTools, ...decisionTools];
 	const toolByName = new Map<string, PiAgentTool>(
 		investigationTools.map((tool) => [tool.name, tool]),
 	);
@@ -303,14 +299,15 @@ export function createPiGuardianModelCall(
 			},
 		];
 		const context: Context = {
-			systemPrompt: structuredSystemPrompt(request),
+			systemPrompt: request.systemPrompt,
 			messages,
-			tools: investigationTools.map((tool) => ({
+			tools: allTools.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
 				parameters: tool.parameters,
 			})),
 		};
+		let decisionReprompts = 0;
 		for (;;) {
 			if (signal.aborted) throw permanentModelError("Pi reviewer request was aborted");
 			let current: boolean;
@@ -343,12 +340,46 @@ export function createPiGuardianModelCall(
 				throw transientModelError("Pi reviewer response was truncated");
 			}
 			const requestedTools = responseToolCalls(message);
-			if (requestedTools.length === 0) {
-				if (message.stopReason === "toolUse") {
-					throw transientModelError("Pi reviewer returned an empty tool-use response");
-				}
-				return finalResponseText(message);
+			const decisionCalls = requestedTools.filter(isDecisionTool);
+			if (
+				requestedTools.length === 1 &&
+				decisionCalls.length === 1 &&
+				hasEmptyArguments(decisionCalls[0] as ToolCall)
+			) {
+				return {
+					text:
+						decisionCalls[0]?.name === "approve"
+							? '{"outcome":"allow"}'
+							: '{"outcome":"deny"}',
+				};
 			}
+
+			if (requestedTools.length === 0 || decisionCalls.length > 0) {
+				decisionReprompts += 1;
+				if (decisionReprompts > PI_GUARDIAN_MAX_DECISION_REPROMPTS) {
+					throw permanentModelError("Pi reviewer did not call exactly one decision tool");
+				}
+				messages.push(message);
+				for (const call of requestedTools) {
+					messages.push({
+						role: "toolResult",
+						toolCallId: call.id,
+						toolName: call.name,
+						content: toolResultText(
+							new Error("Call exactly one final decision tool without other tool calls"),
+						),
+						isError: true,
+						timestamp: now(),
+					});
+				}
+				messages.push({
+					role: "user",
+					content: "Call exactly one final decision tool: approve or deny. Do not answer in text.",
+					timestamp: now(),
+				});
+				continue;
+			}
+
 			if (!request.investigationBudget.reserve(requestedTools.length)) {
 				throw permanentModelError("Pi reviewer exceeded its read-only investigation limit");
 			}

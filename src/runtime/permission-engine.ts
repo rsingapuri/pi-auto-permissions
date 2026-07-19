@@ -19,6 +19,7 @@ import {
   GUARDIAN_DENIAL_MESSAGE,
   GuardianReviewEngine,
   guardianReviewBindingsEqual,
+  type GuardianDenialReason,
   type GuardianReviewBinding,
   type GuardianTranscriptItem,
 } from "../guardian/index.ts";
@@ -39,6 +40,8 @@ export interface PermissionAction {
   readonly cwd: string;
   readonly toolMetadata: unknown;
   /** Static file admission is valid only for Pi's actual built-in definition. */
+  readonly trustedFileTool?: boolean;
+  /** @deprecated Test/backward-compatibility alias for trustedFileTool. */
   readonly builtInFileTool?: boolean;
   /** Built only if this action actually reaches Guardian review. */
   readonly transcript:
@@ -62,6 +65,8 @@ export interface PermissionDenyDecision {
     | "sandbox_unavailable"
     | "review_denied"
     | "stale_binding";
+  /** User-visible diagnostic category; never changes the fixed model-facing denial. */
+  readonly reviewReason?: GuardianDenialReason;
   readonly interruptTurn: boolean;
 }
 
@@ -227,33 +232,41 @@ export class PermissionEngine {
         false,
       );
     }
-    if (this.guardian.isTurnInterrupted(action.turnId)) {
-      return { ...deny("review_denied"), interruptTurn: true };
-    }
     if (mode === "fault") return this.denyAction(action, "configuration_fault");
 
-    if (action.toolName === "bash") return this.gateBash(action, global);
+    if (action.toolName === "bash") {
+      if (this.guardian.isTurnInterrupted(action.turnId)) {
+        return { ...deny("review_denied"), interruptTurn: true };
+      }
+      return this.gateBash(action, global);
+    }
 
-    if (action.builtInFileTool === true) {
+    if (action.trustedFileTool === true || action.builtInFileTool === true) {
       try {
         const pathDecision = await this.pathPolicy.classify({
           toolName: action.toolName,
           input: action.input,
         });
         if (pathDecision.disposition === "admit") {
-          return this.admitAction(action, "passthrough");
+          return this.admitAction(action, "passthrough", false);
         }
         if (pathDecision.disposition === "deny") {
           return this.denyAction(action, "invalid_action");
         }
+        // Out-of-root and protected-metadata classifications are not
+        // catastrophic shell actions. The trusted direct tool remains the
+        // user's responsibility and executes without model review.
+        return this.admitAction(action, "passthrough", false);
       } catch {
-        // Classification uncertainty receives Guardian review. The extension
-        // startup fallback separately hard-denies all direct mutations when a
-        // usable path policy could not be constructed.
+        // A broken classifier cannot safely distinguish the extension's own
+        // control plane. Deny deterministically; never substitute model review.
+        return this.denyAction(action, "invalid_action");
       }
     }
 
-    return this.review(action, global, "passthrough");
+    // Third-party/custom implementations are explicitly installed and trusted
+    // by the user. Their semantics are outside Guardian's shell-only scope.
+    return this.admitAction(action, "passthrough", false);
   }
 
   private async gateBash(action: PermissionAction, global: GlobalState): Promise<PermissionDecision> {
@@ -335,20 +348,12 @@ export class PermissionEngine {
       return bindingFrom(currentCanonicalAction, currentGlobal.config, this.session, this.sessionId);
     };
 
-    let transcript: readonly GuardianTranscriptItem[];
-    try {
-      transcript =
-        typeof action.transcript === "function" ? action.transcript() : action.transcript;
-    } catch {
-      return this.denyAction(action, "invalid_action");
-    }
-
     let result;
     try {
       result = await this.guardian.review({
         turnId: action.turnId,
         binding: capturedBinding,
-        transcript,
+        transcript: [],
         ...(action.signal === undefined ? {} : { signal: action.signal }),
         getCurrentBinding,
       });
@@ -360,6 +365,7 @@ export class PermissionEngine {
         outcome: "deny",
         message: result.message,
         reason: "review_denied",
+        reviewReason: result.reason,
         interruptTurn: result.interruptTurn,
       };
     }

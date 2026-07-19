@@ -21,7 +21,6 @@ import {
   type ModelRegistry,
   type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPermissionExtension } from "../../src/extension.ts";
 import {
@@ -449,11 +448,9 @@ describe("black-box Pi extension lifecycle", () => {
       },
     });
 
-    await runtime.runner.emitToolCall({
-      type: "tool_call",
-      toolCallId: "custom-1",
-      toolName: "third_party",
-      input: { operation: "safe" },
+    await runtime.bash({
+      command: "echo reviewed",
+      sandbox_permissions: "require_escalated",
     });
     expect(runtime.env.guardianCalls.at(-1)).toMatchObject({ reasoning: "xhigh" });
   });
@@ -576,7 +573,7 @@ describe("black-box Pi action routing", () => {
     expectNoActionDialogs(runtime);
   });
 
-  it("I5 routes all built-in file tools by source identity and canonical path class", async () => {
+  it("I5 routes standard file tools deterministically without Guardian review", async () => {
     await configureReviewer();
     const runtime = await createRuntime();
     await runtime.start();
@@ -605,14 +602,11 @@ describe("black-box Pi action routing", () => {
       for (const toolName of ["write", "edit"]) {
         expect(
           await runtime.tool(toolName, { path: target, content: "unsafe" }, `${route}-${toolName}`),
-        ).toEqual({ block: true, reason: GUARDIAN_DENIAL_MESSAGE });
+        ).toBeUndefined();
       }
     }
-    expect(await runtime.tool("write", { content: "missing path" }, "unresolved-write")).toEqual({
-      block: true,
-      reason: GUARDIAN_DENIAL_MESSAGE,
-    });
-    expect(runtime.env.guardianCalls).toHaveLength(5);
+    expect(await runtime.tool("write", { content: "missing path" }, "unresolved-write")).toBeUndefined();
+    expect(runtime.env.guardianCalls).toEqual([]);
 
     for (const toolName of ["write", "edit"]) {
       expect(
@@ -623,11 +617,41 @@ describe("black-box Pi action routing", () => {
         ),
       ).toEqual({ block: true, reason: GUARDIAN_DENIAL_MESSAGE });
     }
-    expect(runtime.env.guardianCalls).toHaveLength(5);
+    expect(runtime.env.guardianCalls).toEqual([]);
     expectNoActionDialogs(runtime);
   });
 
-  it("I5 does not grant static file permissions to a custom tool spoofing a built-in name", async () => {
+  it("I5 statically routes trusted SDK-backed standard file tools", async () => {
+    await configureReviewer();
+    const sdkTools = toolInfo().map((tool) =>
+      ["read", "grep", "find", "ls", "write", "edit"].includes(tool.name)
+        ? {
+            ...tool,
+            sourceInfo: {
+              path: `<sdk:${tool.name}>`,
+              source: "sdk",
+              scope: "temporary" as const,
+              origin: "top-level" as const,
+            },
+          }
+        : tool,
+    );
+    const runtime = await createRuntime({ tools: sdkTools });
+    await runtime.start();
+    runtime.env.verdict = "deny";
+
+    expect(await runtime.tool("read", { path: "/tmp/evidence.log" }, "sdk-read")).toBeUndefined();
+    expect(
+      await runtime.tool(
+        "edit",
+        { path: path.join(workspace, "sdk-edit.txt"), edits: [] },
+        "sdk-edit",
+      ),
+    ).toBeUndefined();
+    expect(runtime.env.guardianCalls).toEqual([]);
+  });
+
+  it("I5 passes through a custom tool even when it uses a standard file-tool name", async () => {
     await configureReviewer();
     const spoofedTools = toolInfo().map((tool) =>
       tool.name === "write"
@@ -653,8 +677,8 @@ describe("black-box Pi action routing", () => {
         { path: path.join(workspace, "would-be-static.txt"), content: "spoofed" },
         "spoofed-write",
       ),
-    ).toEqual({ block: true, reason: GUARDIAN_DENIAL_MESSAGE });
-    expect(runtime.env.guardianCalls).toHaveLength(1);
+    ).toBeUndefined();
+    expect(runtime.env.guardianCalls).toEqual([]);
   });
 
   it("instructs the agent to re-run important sandbox failures with escalation", async () => {
@@ -673,7 +697,7 @@ describe("black-box Pi action routing", () => {
     expect(await runtime.tool("third_party", { mode: "auto" }, "custom-auto")).toBeUndefined();
     expect(runtime.env.sandboxCommands).toEqual(["echo auto"]);
     expect(runtime.env.localCommands).toEqual([]);
-    expect(runtime.env.guardianCalls).toHaveLength(1);
+    expect(runtime.env.guardianCalls).toEqual([]);
 
     await runtime.command("perm", "unrestricted");
     await runtime.bash({ command: "echo unrestricted" });
@@ -692,7 +716,7 @@ describe("black-box Pi action routing", () => {
       "echo unrestricted",
       "rm -rf unrestricted-output",
     ]);
-    expect(runtime.env.guardianCalls).toHaveLength(1);
+    expect(runtime.env.guardianCalls).toEqual([]);
 
     await runtime.command("perm", "auto");
     await runtime.command("perm-enabled", "off");
@@ -715,13 +739,13 @@ describe("black-box Pi action routing", () => {
       "echo off",
       "rm -rf off-output",
     ]);
-    expect(runtime.env.guardianCalls).toHaveLength(1);
+    expect(runtime.env.guardianCalls).toEqual([]);
 
     await runtime.command("perm-enabled", "on");
     await runtime.bash({ command: "echo auto-again" });
     expect(await runtime.tool("third_party", { mode: "auto-again" }, "custom-auto-again")).toBeUndefined();
     expect(runtime.env.sandboxCommands).toEqual(["echo auto", "echo auto-again"]);
-    expect(runtime.env.guardianCalls).toHaveLength(2);
+    expect(runtime.env.guardianCalls).toEqual([]);
   });
 
   it("I5 reviews pinned dangerous bash without an explicit escalation request", async () => {
@@ -742,7 +766,7 @@ describe("black-box Pi action routing", () => {
     expect(runtime.env.localCommands).toEqual([]);
     expect(runtime.env.sandboxCommands).toEqual(["rm -rf generated"]);
     expect(runtime.ui.notify).toHaveBeenCalledWith(
-      "Permission denied: bash action was not executed.",
+      "Permission denied: bash action was not executed. Guardian result: model_denied.",
       "warning",
     );
   });
@@ -768,28 +792,21 @@ describe("black-box Pi action routing", () => {
     expectNoActionDialogs(runtime);
   });
 
-  it("I5 reviews trusted third-party tool calls and blocks before their executor on denial", async () => {
+  it("I5 passes trusted third-party tool calls through without Guardian review", async () => {
     await configureReviewer();
     const runtime = await createRuntime();
     await runtime.start();
+    runtime.env.verdict = "deny";
 
-    const allow = await runtime.runner.emitToolCall({
+    const result = await runtime.runner.emitToolCall({
       type: "tool_call",
-      toolCallId: "third-allow",
+      toolCallId: "third-party",
       toolName: "third_party",
       input: { target: "one" },
     });
-    expect(allow).toBeUndefined();
-
-    runtime.env.verdict = "deny";
-    const deny = await runtime.runner.emitToolCall({
-      type: "tool_call",
-      toolCallId: "third-deny",
-      toolName: "third_party",
-      input: { target: "two" },
-    });
-    expect(deny).toEqual({ block: true, reason: GUARDIAN_DENIAL_MESSAGE });
-    expect(runtime.ui.notify).toHaveBeenCalledWith(
+    expect(result).toBeUndefined();
+    expect(runtime.env.guardianCalls).toEqual([]);
+    expect(runtime.ui.notify).not.toHaveBeenCalledWith(
       "Permission denied: third_party action was not executed.",
       "warning",
     );
@@ -914,22 +931,16 @@ describe("black-box Pi action routing", () => {
     const runtime = await createRuntime({ uiMode: "print" });
     await runtime.start();
     runtime.env.verdict = "deny";
-    const denied = await runtime.runner.emitToolCall({
-      type: "tool_call",
-      toolCallId: "denied",
-      toolName: "third_party",
-      input: { danger: true },
-    });
-    expect(denied).toEqual({ block: true, reason: GUARDIAN_DENIAL_MESSAGE });
+    await expect(
+      runtime.bash({
+        command: "echo reviewed",
+        sandbox_permissions: "require_escalated",
+      }),
+    ).rejects.toThrow(GUARDIAN_DENIAL_MESSAGE);
 
     runtime.env.verdict = "allow";
-    const safer = await runtime.runner.emitToolCall({
-      type: "tool_call",
-      toolCallId: "safer",
-      toolName: "third_party",
-      input: { danger: false },
-    });
-    expect(safer).toBeUndefined();
+    await runtime.bash({ command: "echo safer" });
+    expect(runtime.env.sandboxCommands).toEqual(["echo safer"]);
     expectNoActionDialogs(runtime);
   });
 
@@ -958,38 +969,29 @@ describe("black-box Pi action routing", () => {
     await runtime.start();
     await sibling.start();
 
-    const staleApproval = runtime.tool(
-      "third_party",
-      { operation: "captured-under-high" },
-      "stale-review",
-    );
+    const staleApproval = runtime.bash({
+      command: "echo captured-under-high",
+      sandbox_permissions: "require_escalated",
+    });
     await reviewStarted;
     expect(runtime.env.guardianCalls.at(-1)).toMatchObject({ reasoning: "high" });
 
     await sibling.command("perm-auto-model", "test-provider/judge/one xhigh");
     releaseReview?.();
-    await expect(staleApproval).resolves.toEqual({
-      block: true,
-      reason: GUARDIAN_DENIAL_MESSAGE,
-    });
+    await expect(staleApproval).rejects.toThrow(GUARDIAN_DENIAL_MESSAGE);
 
-    expect(
-      await runtime.tool(
-        "third_party",
-        { operation: "fresh-under-xhigh" },
-        "fresh-review",
-      ),
-    ).toBeUndefined();
+    await runtime.bash({
+      command: "echo fresh-under-xhigh",
+      sandbox_permissions: "require_escalated",
+    });
     expect(runtime.env.guardianCalls.at(-1)).toMatchObject({ reasoning: "xhigh" });
   });
 
   it("I5/I11 delivers a denied action to the real Pi agent loop as an error tool result", async () => {
     await configureReviewer();
     const contexts: Context[] = [];
-    const customExecutor = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "executor ran" }],
-      details: undefined,
-    }));
+    const localCommands: string[] = [];
+    const sandboxCommands: string[] = [];
     const modelRuntime = await ModelRuntime.create({
       credentials: new InMemoryCredentialStore(),
       modelsPath: null,
@@ -1022,8 +1024,11 @@ describe("black-box Pi action routing", () => {
                 {
                   type: "toolCall",
                   id: "danger-call",
-                  name: "third_party",
-                  arguments: { danger: true },
+                  name: "bash",
+                  arguments: {
+                    command: "rm -rf dangerous",
+                    sandbox_permissions: "require_escalated",
+                  },
                 },
               ],
           reason,
@@ -1040,7 +1045,7 @@ describe("black-box Pi action routing", () => {
 
     const sandbox = new FakeSandboxController(
       { kind: "sandboxed", warnings: [] },
-      recordingOperations([]),
+      recordingOperations(sandboxCommands),
     );
     const extension = createPermissionExtension({
       getAgentDir: () => agentDir,
@@ -1055,7 +1060,7 @@ describe("black-box Pi action routing", () => {
       transcript: () => [{ kind: "user", text: "do the action" }],
       createBashDefinition: (cwd, operations) =>
         createBashToolDefinition(cwd, {
-          operations: operations ?? recordingOperations([]),
+          operations: operations ?? recordingOperations(localCommands),
         }),
     });
     const loader = new DefaultResourceLoader({
@@ -1076,25 +1081,17 @@ describe("black-box Pi action routing", () => {
       sessionManager: SessionManager.inMemory(workspace),
       modelRuntime,
       model: mainModel,
-      tools: ["third_party"],
-      customTools: [
-        {
-          name: "third_party",
-          label: "third party",
-          description: "trusted custom action",
-          parameters: Type.Object({ danger: Type.Boolean() }),
-          execute: customExecutor,
-        },
-      ],
+      tools: ["bash"],
     });
     try {
       await session.bindExtensions({ mode: "print" });
       await session.prompt("Try the risky action, then continue if it is denied.");
-      expect(customExecutor).not.toHaveBeenCalled();
+      expect(localCommands).toEqual([]);
+      expect(sandboxCommands).toEqual([]);
       const toolResult = session.messages.find((message) => message.role === "toolResult");
       expect(toolResult).toMatchObject({
         role: "toolResult",
-        toolName: "third_party",
+        toolName: "bash",
         isError: true,
         content: [{ type: "text", text: GUARDIAN_DENIAL_MESSAGE }],
       });

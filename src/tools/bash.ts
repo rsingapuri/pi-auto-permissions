@@ -83,7 +83,7 @@ export function registerGuardedBashTool(
         ...(reviewSignal === undefined ? {} : { signal: reviewSignal }),
       });
       if (decision.outcome === "deny") {
-        notifyPermissionDenied(ctx, "bash");
+        notifyPermissionDenied(ctx, "bash", decision.reviewReason);
         if (decision.interruptTurn) ctx.abort();
         throw new Error(decision.message);
       }

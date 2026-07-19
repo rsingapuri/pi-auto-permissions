@@ -11,8 +11,8 @@ The package has eight narrow components:
 1. `state/`: atomic global configuration and per-session requested mode;
 2. `policy/`: canonical requests, path classification, dangerous-command rules,
    and admission routing;
-3. `guardian/` and `pi/`: pinned Guardian prompt, transcript projection, model invocation,
-   strict verdict parser, deadlines, and denial circuit breaker;
+3. `guardian/` and `pi/`: minimal Guardian prompt, canonical action payload,
+   model invocation, strict verdict parser, deadlines, and denial circuit breaker;
 4. `sandbox/`: a fixed macOS/Linux shell sandbox plus ReviewOnly fallback;
 5. `runtime/`: the non-executing admission state machine and exact review binding;
 6. `tools/`: Pi tool interception and the sandbox-aware `bash` override;
@@ -45,7 +45,7 @@ Guarantees supported: I13 and reproducible policy semantics.
   the final admission/executor boundary.
 - Implement deterministic, bounded canonical JSON with sorted keys.
 - Reject unsupported values, excessive depth, cycles, non-finite numbers, and
-  requests beyond the transcript/action budget.
+  requests beyond the canonical action budget.
 - Bind every review to the canonical action, exact reviewer model and thinking
   level, plus global/session/backend revision.
 
@@ -92,13 +92,18 @@ Guarantees supported: I1, I2, I3, I8, I12, I14.
 - Resolve existing targets with `realpath`; for creation, walk to the nearest
   existing ancestor and append unresolved components without accepting `..`.
 - Materialize workspace and temporary writable roots.
-- Detect `.git` directories and gitdir pointer files; protect resolved Git data.
-- Protect top-level `.git`, `.agents`, `.codex`, and `.pi` recursively.
-- Statically deny the extension's durable state and lock roots before review.
-- Auto-admit in-root non-protected `write`/`edit`; review all others.
-- Auto-admit the known read-only built-ins.
+- Detect `.git` directories, gitdir pointer files, and conventional metadata
+  roots for deterministic classification; classification never invokes Guardian.
+- Statically deny the extension's durable state and lock roots.
+- Auto-admit every other trusted standard `write`/`edit` target after
+  classification.
+- Treat exact Pi built-in (`<builtin:name>`) and host-supplied SDK
+  (`<sdk:name>`) identities as trusted standard file tools; Auto-admit the four
+  known read-only names and apply path policy to `write`/`edit`.
+- Pass third-party/custom tools through as user-installed trusted
+  implementations; never invoke Guardian for a non-shell tool.
 - If policy construction fails, install a narrow fallback that admits only those
-  read-only built-ins and denies every direct mutation.
+  read-only standard tools and denies every direct mutation.
 
 Guarantees supported: I5, I8, I10, I14.
 
@@ -136,14 +141,24 @@ Guarantees supported: I5-I10, I14, I17.
   retries to four investigation rounds and eight total calls inside the
   aggregate deadline. Implement them with bounded Node filesystem operations;
   never execute or download a search helper.
-- Provide a bounded compact transcript and exact canonical action.
-- Use a short Codex-derived severe-harm policy and verdict schema, removing
-  human override/request paths and treating missing context as a reason to
-  investigate rather than deny.
-- Enforce one aggregate 90-second deadline and at most three attempts.
-- Parse exact JSON; normalize no prose and never infer an allow.
+- Invoke the reviewer only for shell actions selected by Step 6; send only the
+  exact canonical shell action as the user payload, with no transcript, retry
+  rationale, or session metadata.
+- Send one concise semantic policy: `Call deny only when the exact command is
+  clearly likely to cause severe, difficult-to-reverse harm: broad loss of
+  important data, disclosure of secrets or private data to an untrusted
+  destination, major shared or production service disruption, or persistent
+  broad security weakening. Otherwise call approve.` Send no schema, taxonomy,
+  tenant policy, authorization rubric, or output-contract preamble.
+- Expose final `approve` and `deny` tools alongside the read-only investigation
+  tools. Re-prompt text, missing, mixed, or multiple decisions up to twice and
+  accept only one valid final decision call.
+- Enforce one aggregate 90-second deadline and at most three retryable attempts.
+- Convert the structured decision call locally into the exact one-field verdict;
+  never interpret free-form model text as a decision.
 - Treat every non-allow/failure as denial and return one fixed denial string.
-- Track three consecutive and ten-of-fifty per-turn denial breakers.
+- Track three consecutive and ten-of-fifty per-turn shell denial breakers;
+  breaker interruption never blocks non-shell passthrough.
 
 Guarantees supported: I5, I6, I8-I11, I14-I16.
 

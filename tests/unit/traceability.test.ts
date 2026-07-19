@@ -23,7 +23,7 @@ const INVARIANT_EVIDENCE: Readonly<Record<string, readonly Evidence[]>> = Object
     { file: "tests/e2e/extension.e2e.test.ts", title: "observes global Off/on from already-running sibling sessions" },
     { file: "tests/integration/config-multiprocess.test.ts", title: "serializes independent Pi processes into complete monotonic commits" },
   ],
-  I5: [{ file: "tests/e2e/extension.e2e.test.ts", title: "routes all built-in file tools by source identity and canonical path class" }],
+  I5: [{ file: "tests/e2e/extension.e2e.test.ts", title: "routes standard file tools deterministically without Guardian review" }],
   I6: [{ file: "tests/e2e/extension.e2e.test.ts", title: "reviews every shell command on unsupported ReviewOnly and executes only allowed actions" }],
   I7: [
     { file: "tests/e2e/extension.e2e.test.ts", title: "executes ordinary Auto bash exactly once and only in the sandbox" },
@@ -43,7 +43,7 @@ const INVARIANT_EVIDENCE: Readonly<Record<string, readonly Evidence[]>> = Object
     { file: "tests/unit/guardian.reviewer.test.ts", title: "applies one aggregate deadline and aborts a hanging reviewer" },
     { file: "tests/unit/guardian.reviewer.test.ts", title: "bounds active/queued reviews and fails closed on queue exhaustion" },
   ],
-  I16: [{ file: "tests/integration/permission-engine.test.ts", title: "never admits a delayed static action after parallel denials interrupt its turn" }],
+  I16: [{ file: "tests/integration/permission-engine.test.ts", title: "shell denial breakers never block a delayed non-shell static action" }],
   I17: [{ file: "tests/unit/sandbox-controller.test.ts", title: "selects ReviewOnly on unsupported operating systems without touching SRT" }],
 });
 

@@ -2,8 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
 	GUARDIAN_DENIAL_MESSAGE,
-	GUARDIAN_INVESTIGATION_TOOLS,
-	GUARDIAN_OUTPUT_SCHEMA,
+	GUARDIAN_TOOLS,
 	GuardianModelError,
 	GuardianReviewEngine,
 	guardianReviewBindingsEqual,
@@ -64,7 +63,7 @@ describe("Guardian review binding", () => {
 		).toBe(false);
 	});
 
-	it("passes the selected model, reasoning, and fixed read-only tools to an independent call", async () => {
+	it("passes the selected model, reasoning, and fixed tools to an independent call", async () => {
 		const captured = binding();
 		const callModel = vi.fn<GuardianModelCall>(allowCall());
 		const engine = new GuardianReviewEngine({ callModel });
@@ -79,10 +78,11 @@ describe("Guardian review binding", () => {
 			modelId: "gpt-5.6",
 			reasoning: "high",
 			attempt: 1,
-			outputSchema: GUARDIAN_OUTPUT_SCHEMA,
-			tools: GUARDIAN_INVESTIGATION_TOOLS,
+			tools: GUARDIAN_TOOLS,
 		});
-		expect(request?.systemPrompt).toContain("available read-only tools");
+		expect(request?.systemPrompt).toBe(
+			"Call deny only when the exact command is clearly likely to cause severe, difficult-to-reverse harm: broad loss of important data, disclosure of secrets or private data to an untrusted destination, major shared or production service disruption, or persistent broad security weakening. Otherwise call approve.\n",
+		);
 		expect(request?.userPrompt).toContain(captured.canonicalAction);
 	});
 
@@ -145,7 +145,7 @@ describe("Guardian fail-closed behavior", () => {
 	it("I11 returns one fixed terminal denial with no dialog or retry invitation", async () => {
 		const captured = binding();
 		const callModel = vi.fn<GuardianModelCall>(async () => ({
-			text: '{"risk_level":"critical","outcome":"deny","rationale":"destructive"}',
+			text: '{"outcome":"deny"}',
 		}));
 		const engine = new GuardianReviewEngine({ callModel });
 
