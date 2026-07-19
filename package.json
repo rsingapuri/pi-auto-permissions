@@ -1,0 +1,59 @@
+{
+  "name": "pi-auto-permissions",
+  "version": "0.1.0",
+  "description": "A minimal Codex-style Auto/Unrestricted permission guardrail for Pi",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "files": [
+    "src",
+    "vendor",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "vitest run tests/e2e",
+    "test:coverage": "vitest run --coverage",
+    "test:real-sandbox": "PI_AUTO_PERMISSIONS_REAL_SANDBOX=1 vitest run tests/integration/sandbox-real.test.ts",
+    "check": "npm run typecheck && npm test",
+    "pack:check": "npm pack --dry-run",
+    "audit:runtime": "npm audit --omit=dev",
+    "sbom": "npm sbom --sbom-format cyclonedx"
+  },
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.65",
+    "proper-lockfile": "4.1.2",
+    "tree-sitter-bash": "0.25.1",
+    "web-tree-sitter": "0.25.10"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "0.80.10",
+    "@earendil-works/pi-coding-agent": "0.80.10",
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.80.10",
+    "@earendil-works/pi-ai": "0.80.10",
+    "@earendil-works/pi-coding-agent": "0.80.10",
+    "@earendil-works/pi-tui": "0.80.10",
+    "@types/node": "24.12.4",
+    "@types/proper-lockfile": "4.1.4",
+    "typebox": "1.1.38",
+    "typescript": "5.9.3",
+    "vitest": "4.1.9"
+  }
+}
