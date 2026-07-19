@@ -412,7 +412,9 @@ API. Denial returns a fixed tool result to the model:
 > Permission denied. This action was not executed. No override will be requested.
 > Choose a materially safer action.
 
-User-facing selection UI exists only inside explicit user slash commands.
+User-facing selection UI exists only inside explicit user slash commands. A
+permission denial may additionally emit a passive warning notification naming
+the denied tool; that notification is not an approval request.
 
 ### I12. Direct-tool no-self-elevation invariant
 

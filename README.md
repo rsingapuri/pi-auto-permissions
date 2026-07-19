@@ -15,8 +15,9 @@ Permission denied. This action was not executed. No override will be requested. 
 ```
 
 The model cannot appeal that result inside the action. It must issue a new,
-materially safer action. The user can still deliberately change the session's
-mode with `/perm`.
+materially safer action. The user also receives a passive warning notice naming
+the denied tool; it never asks for approval. The user can still deliberately
+change the session's mode with `/perm`.
 
 ## Requirements and installation
 

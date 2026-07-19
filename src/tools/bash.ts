@@ -9,6 +9,7 @@ import {
   type GuardianTranscriptItem,
 } from "../guardian/index.ts";
 import type { PermissionEngine } from "../runtime/index.ts";
+import { notifyPermissionDenied } from "./denial-notice.ts";
 
 export const GUARDED_BASH_METADATA = Object.freeze({
   kind: "pi-auto-permissions-bash",
@@ -56,7 +57,10 @@ export function registerGuardedBashTool(
     executionMode: "sequential",
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const runtime = getRuntime();
-      if (runtime === null) throw new Error(GUARDIAN_DENIAL_MESSAGE);
+      if (runtime === null) {
+        notifyPermissionDenied(ctx, "bash");
+        throw new Error(GUARDIAN_DENIAL_MESSAGE);
+      }
       await runtime.refreshBackend(ctx);
       const reviewSignal = runtime.signal(signal);
 
@@ -71,6 +75,7 @@ export function registerGuardedBashTool(
         ...(reviewSignal === undefined ? {} : { signal: reviewSignal }),
       });
       if (decision.outcome === "deny") {
+        notifyPermissionDenied(ctx, "bash");
         if (decision.interruptTurn) ctx.abort();
         throw new Error(decision.message);
       }

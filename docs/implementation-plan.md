@@ -20,7 +20,8 @@ The package has eight narrow components:
 8. `extension.ts`: lifecycle wiring only.
 
 No component may open a human approval dialog. UI selection belongs only to the
-three explicit command handlers.
+three explicit command handlers. Denial paths may emit a passive warning notice,
+but that notice never requests approval.
 
 ## 2. Stepwise construction
 
@@ -264,7 +265,8 @@ Cover:
 - explicit user commands can change settings;
 - Off/on and reviewer changes observed by already-running sibling runtime
   simulations;
-- denial is an `isError` tool result visible to the model, with no UI dialog;
+- denial is an `isError` tool result visible to the model, with a passive user
+  warning notice and no UI dialog;
 - the model can continue with a safer call after denial;
 - the shipped TypeScript entrypoint loads through Pi's resource loader and the
   no-dialog path completes in print mode.

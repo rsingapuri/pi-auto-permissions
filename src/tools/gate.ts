@@ -7,6 +7,7 @@ import type {
 import type { GuardianTranscriptItem } from "../guardian/index.ts";
 import { GUARDIAN_DENIAL_MESSAGE } from "../guardian/index.ts";
 import type { PermissionEngine } from "../runtime/index.ts";
+import { notifyPermissionDenied } from "./denial-notice.ts";
 
 const DIRECT_FILE_TOOL_NAMES = new Set(["read", "grep", "find", "ls", "write", "edit"]);
 
@@ -26,7 +27,10 @@ export function registerPermissionToolGate(
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName === "bash") return;
     const runtime = getRuntime();
-    if (runtime === null) return { block: true, reason: GUARDIAN_DENIAL_MESSAGE };
+    if (runtime === null) {
+      notifyPermissionDenied(ctx, event.toolName);
+      return { block: true, reason: GUARDIAN_DENIAL_MESSAGE };
+    }
 
     await runtime.refreshStatus(ctx);
     const info = findToolInfo(pi, event.toolName);
@@ -43,6 +47,7 @@ export function registerPermissionToolGate(
       ...(reviewSignal === undefined ? {} : { signal: reviewSignal }),
     });
     if (decision.outcome === "admit") return;
+    notifyPermissionDenied(ctx, event.toolName);
     if (decision.interruptTurn) ctx.abort();
     return { block: true, reason: decision.message };
   });

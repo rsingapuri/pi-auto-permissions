@@ -728,6 +728,10 @@ describe("black-box Pi action routing", () => {
     expect(runtime.env.guardianCalls).toHaveLength(2);
     expect(runtime.env.localCommands).toEqual([]);
     expect(runtime.env.sandboxCommands).toEqual(["rm -rf generated"]);
+    expect(runtime.ui.notify).toHaveBeenCalledWith(
+      "Permission denied: bash action was not executed.",
+      "warning",
+    );
   });
 
   it("I5/I9 approved escalation runs local once; denial runs zero times with fixed no-recourse error", async () => {
@@ -772,6 +776,10 @@ describe("black-box Pi action routing", () => {
       input: { target: "two" },
     });
     expect(deny).toEqual({ block: true, reason: GUARDIAN_DENIAL_MESSAGE });
+    expect(runtime.ui.notify).toHaveBeenCalledWith(
+      "Permission denied: third_party action was not executed.",
+      "warning",
+    );
     expectNoActionDialogs(runtime);
   });
 
