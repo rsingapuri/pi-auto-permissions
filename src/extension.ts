@@ -146,6 +146,7 @@ export function createPermissionExtension(
           dependencies.createBashDefinition,
         );
         const permissionStatus = await updateStatus(ctx, engine);
+        notifyUnconfiguredAuto(ctx, permissionStatus);
         notifyBackendFallback(ctx, sandboxStatus, permissionStatus);
         if (pathResult.status === "rejected") {
           ctx.ui.notify(
@@ -372,6 +373,19 @@ function failedSandboxStatus(
   error: unknown,
 ): Extract<SandboxStatus, { kind: "failed" }> {
   return { kind: "failed", phase, error: errorMessage(error) };
+}
+
+function notifyUnconfiguredAuto(
+  ctx: ExtensionContext,
+  permissionStatus: Awaited<ReturnType<PermissionEngine["status"]>>,
+): void {
+  const global = permissionStatus.global;
+  if (global.health === "fault" || !global.config.enabled || global.config.reviewer !== null) return;
+
+  ctx.ui.notify(
+    "Permissions are enabled, but Auto is unavailable because no reviewer model is configured. Run /perm-auto-model to select a reviewer and thinking level.",
+    "warning",
+  );
 }
 
 function notifyBackendFallback(

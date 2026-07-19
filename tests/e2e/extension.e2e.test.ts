@@ -414,6 +414,11 @@ describe("black-box Pi extension lifecycle", () => {
   it("I2 starts first-run sessions effectively Unrestricted until model plus thinking are selected", async () => {
     const runtime = await createRuntime();
     await runtime.start();
+
+    expect(runtime.ui.notify).toHaveBeenCalledWith(
+      "Permissions are enabled, but Auto is unavailable because no reviewer model is configured. Run /perm-auto-model to select a reviewer and thinking level.",
+      "warning",
+    );
     expect(runtime.status()).toBe("Permissions: Unrestricted");
 
     await runtime.bash({ command: "echo first-run" });
